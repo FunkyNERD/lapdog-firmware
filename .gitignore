@@ -1,0 +1,6 @@
+.pio/
+.vscode/
+sdkconfig.*
+!sdkconfig.defaults
+managed_components/
+dependencies.lock
