@@ -4,6 +4,8 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # BLE advertising bursts (lap output) - NimBLE is the smaller host stack.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
+# Legacy (31-byte) adverts via ble_gap_adv_*; see lap_frame.h for the size budget.
+# CONFIG_BT_NIMBLE_EXT_ADV is not set
 
 # ESP-NOW lap output to goggles/RacePanel.
 CONFIG_ESP_WIFI_ENABLED=y

@@ -11,26 +11,49 @@
 #include "freertos/task.h"
 #include "settings.h"
 
+static const char *FW_VERSION = "0.2.0";
+
 static void printSettings()
 {
     const Settings &s = settings::get();
-    printf("freq=%u pilot=%u alpha=%.2f enter=%.1f exit=%.1f minlap=%lu phrase=\"%s\" mode=%s\n", s.freqMhz,
-           s.pilot, s.detector.emaAlpha, s.detector.enterDb, s.detector.exitDb,
-           (unsigned long)s.detector.minLapMs, s.bindPhrase, app::armed() ? "timer" : "idle");
+    char v[80];
+    for (const char *key : timer_settings::KEYS)
+        if (timer_settings::get(s, key, v, sizeof(v))) printf("S:%s=%s\n", key, v);
+    printf("S:heat=%u\n", settings::nextHeat());
+    const char *state = !app::armed() ? "idle" : app::stage() == race::PRACTICE_RUN ? "practice" : "race";
+    printf("S:state=%s\n", state);
+    printf("S:fw=%s\n", FW_VERSION);
 }
 
-static bool handleSet(char *key, char *val)
+static bool handleArm()
 {
-    Settings &s = settings::get();
-    if (!key || !val) return false;
-    if (!strcmp(key, "freq")) s.freqMhz = (uint16_t)atoi(val);
-    else if (!strcmp(key, "pilot")) s.pilot = (uint8_t)atoi(val);
-    else if (!strcmp(key, "enter")) s.detector.enterDb = strtof(val, nullptr);
-    else if (!strcmp(key, "exit")) s.detector.exitDb = strtof(val, nullptr);
-    else if (!strcmp(key, "alpha")) s.detector.emaAlpha = strtof(val, nullptr);
-    else if (!strcmp(key, "minlap")) s.detector.minLapMs = (uint32_t)atol(val);
-    else if (!strcmp(key, "phrase")) snprintf(s.bindPhrase, sizeof(s.bindPhrase), "%s", val);
+    char *what = strtok(nullptr, " ");
+    app::ArmRequest r = {};
+    if (!what || !strcmp(what, "practice")) r.mode = race::PRACTICE;
+    else if (!strcmp(what, "race"))
+    {
+        r.mode = race::RACE;
+        char *kind = strtok(nullptr, " ");
+        char *n = strtok(nullptr, " ");
+        if (kind)
+        {
+            if (!n || atol(n) <= 0) return false;
+            r.overrideLimit = true;
+            if (!strcmp(kind, "laps") && atol(n) <= 99)
+            {
+                r.limit = race::LIMIT_LAPS;
+                r.laps = (uint8_t)atol(n);
+            }
+            else if (!strcmp(kind, "time") && atol(n) <= 3600)
+            {
+                r.limit = race::LIMIT_TIME;
+                r.timeS = (uint16_t)atol(n);
+            }
+            else return false;
+        }
+    }
     else return false;
+    app::requestArm(r);
     return true;
 }
 
@@ -46,16 +69,36 @@ static void handleLine(char *line)
         char *v = strtok(nullptr, " ");
         app::setRssiStream(v && !strcmp(v, "on"));
     }
+    else if (!strcmp(cmd, "disarm")) app::requestDisarm();
+    else if (!strcmp(cmd, "heat"))
+    {
+        char *v = strtok(nullptr, " ");
+        if (!v || strcmp(v, "next") || !app::armed()) ok = false;
+        else app::requestNewHeat();
+    }
+    else if (!strcmp(cmd, "restart"))
+    {
+        if (app::armed()) app::requestRestart();
+        else ok = false;
+    }
     else if (app::armed())
     {
         printf("ERR disarm first\n");
         return;
     }
+    else if (!strcmp(cmd, "arm")) ok = handleArm();
     else if (!strcmp(cmd, "set"))
     {
         char *key = strtok(nullptr, " ");
-        char *val = strtok(nullptr, ""); // rest of line (bind phrases have spaces)
-        ok = handleSet(key, val);
+        char *val = strtok(nullptr, ""); // rest of line (bind phrases, event names have spaces)
+        if (!val) val = (char *)"";
+        if (key && !strcmp(key, "heat"))
+        {
+            long n = atol(val);
+            ok = n >= 1 && n <= 65535;
+            if (ok) settings::setNextHeat((uint16_t)n);
+        }
+        else ok = timer_settings::set(settings::get(), key, val);
     }
     else if (!strcmp(cmd, "save")) ok = settings::save();
     else if (!strcmp(cmd, "defaults")) settings::resetDefaults();
@@ -65,7 +108,7 @@ static void handleLine(char *line)
 
 static void task(void *)
 {
-    char line[128];
+    char line[160];
     while (true)
     {
         if (!fgets(line, sizeof(line), stdin)) continue;

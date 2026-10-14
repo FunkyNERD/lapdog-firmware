@@ -1,21 +1,25 @@
 #pragma once
-// Lap/event outputs. The C5 has one RF chain, so wireless outputs follow
-// capture -> lap detected -> brief transmit burst -> resume capture; the
-// caller stops the SDR around radioBurst().
+// Lap/event outputs. USB always carries every frame. The one RF chain does
+// either BLE advert bursts (to the LapDog app) or ESP-NOW (VRxC_ELRS OSD to
+// goggles/RacePanel) - never both, chosen by Settings::link.
+//
+// Wireless follows capture -> event -> brief transmit burst -> resume
+// capture: the sink queues a burst and flush() stops the SDR, sends, and
+// restarts it (the BT/Wi-Fi stack resets the PHY debug registers).
 
 #include <stdint.h>
 
-#include "lap_frame.h"
+#include "race.h"
+#include "timer_settings.h"
 
 namespace outputs
 {
 
-void begin(const uint8_t uid[6]);
+// Brings up the selected link and tears down the other. Cheap when nothing
+// changed. Call with the SDR stopped (idle), e.g. right before arming.
+void setLink(Link link, const uint8_t uid[6]);
 
-// USB (CDC): always, immediately - doesn't touch the radio.
-void usb(const lapframe::Frame &f);
-
-// BLE advert burst + ESP-NOW OSD message. Blocks for the burst.
-void radioBurst(const lapframe::Frame &f, uint16_t lapNumber);
+// The session's sink: frames to USB immediately, radio on flush().
+race::Sink &sink();
 
 } // namespace outputs

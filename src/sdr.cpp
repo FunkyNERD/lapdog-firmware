@@ -11,14 +11,18 @@ static const uint32_t SIM_PASS_MS = 300;
 
 static uint32_t simStartMs = 0;
 static bool simActive = false;
+static bool isRunning = false;
 
 bool sdr::begin(uint16_t freqMhz)
 {
-    ESP_LOGW(TAG, "stub: not tuning to %u MHz (ESP-SDR not integrated)", freqMhz);
+    ESP_LOGD(TAG, "stub: not tuning to %u MHz (ESP-SDR not integrated)", freqMhz);
+    isRunning = true;
     return true;
 }
 
-void sdr::end() {}
+void sdr::end() { isRunning = false; }
+
+bool sdr::running() { return isRunning; }
 
 void sdr::simulatePass(uint32_t nowMs)
 {

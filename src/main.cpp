@@ -1,7 +1,8 @@
 // LapDog - sits by the gate, barks on every lap.
 //
 // Idle mode: radio free, config over USB. Timer mode: radio dedicated to SDR
-// capture, laps out over USB / BLE / ESP-NOW. Long-press BOOT to toggle.
+// capture, laps and race messages out over USB plus BLE *or* ESP-NOW.
+// Long-press BOOT to toggle; short press starts the next heat.
 
 #include <stdio.h>
 
@@ -11,65 +12,138 @@
 #include "console.h"
 #include "detector.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
-#include "lap_frame.h"
 #include "led.h"
 #include "outputs.h"
+#include "race.h"
 #include "sdr.h"
 #include "settings.h"
 #include "vrxc_msp.h"
 
 static const char *TAG = "lapdog";
 
-static volatile bool isArmed = false;
+enum CmdType
+{
+    CMD_ARM,
+    CMD_DISARM,
+    CMD_NEW_HEAT,
+    CMD_RESTART,
+};
+
+struct Cmd
+{
+    CmdType type;
+    app::ArmRequest arm;
+};
+
+static QueueHandle_t cmds;
 static volatile bool simRequested = false;
 static volatile bool rssiStream = false;
+static volatile race::Stage currentStage = race::IDLE;
+static volatile uint16_t currentHeat = 0;
 
-static uint8_t seq = 0;
-static uint16_t lapCount = 0;
+static race::Session session(outputs::sink());
+static app::ArmRequest lastArm = {};
 
-bool app::armed() { return isArmed; }
+bool app::armed() { return currentStage != race::IDLE; }
+race::Stage app::stage() { return currentStage; }
+uint16_t app::sessionHeat() { return currentHeat; }
 void app::simulatePass() { simRequested = true; }
 void app::setRssiStream(bool on) { rssiStream = on; }
 
+static void send(CmdType t, const app::ArmRequest *r = nullptr)
+{
+    Cmd c = {t, r ? *r : app::ArmRequest{}};
+    xQueueSend(cmds, &c, 0);
+}
+void app::requestArm(const ArmRequest &r) { send(CMD_ARM, &r); }
+void app::requestDisarm() { send(CMD_DISARM); }
+void app::requestNewHeat() { send(CMD_NEW_HEAT); }
+void app::requestRestart() { send(CMD_RESTART); }
+
 static uint32_t millis() { return (uint32_t)(esp_timer_get_time() / 1000); }
 
-static lapframe::Frame frame(lapframe::Type type, uint32_t value)
+static void disarm()
 {
-    return {type, seq++, settings::get().pilot, value};
-}
-
-static void emit(const lapframe::Frame &f, bool radio)
-{
-    outputs::usb(f);
-    if (!radio) return;
+    session.disarm();
     sdr::end();
-    outputs::radioBurst(f, lapCount);
-    sdr::begin(settings::get().freqMhz); // the BT/Wi-Fi stack resets the PHY debug registers
+    currentStage = race::IDLE;
+    led::set(led::IDLE);
+    ESP_LOGI(TAG, "idle");
 }
 
-static void setArmed(bool on, Detector &det, uint32_t now)
+// heat: the heat number to run (a new one comes from settings::nextHeat()).
+static void arm(const app::ArmRequest &r, uint16_t heat, Detector &det)
 {
-    isArmed = on;
-    led::set(on ? led::ARMED : led::IDLE);
-    if (on)
+    Settings &s = settings::get();
+    // Link and bind phrase may have changed while idle.
+    uint8_t uid[6];
+    vrxc::uidFromBindPhrase(s.bindPhrase, uid);
+    outputs::setLink((Link)s.link, uid);
+
+    race::Setup setup = timer_settings::sessionSetup(s, r.mode, heat);
+    if (r.overrideLimit)
     {
-        det = Detector(settings::get().detector);
-        // TODO: measure the in-room baseline over a second or so instead.
-        det.setBaseline(-90.0f);
-        lapCount = 0;
-        sdr::begin(settings::get().freqMhz);
+        setup.limit = r.limit;
+        if (r.limit == race::LIMIT_LAPS) setup.laps = r.laps;
+        else setup.timeS = r.timeS;
     }
-    else
-        sdr::end();
-    emit(frame(on ? lapframe::ARMED : lapframe::DISARMED, now), true);
-    ESP_LOGI(TAG, "%s", on ? "armed" : "idle");
+    lastArm = r;
+    det = Detector(s.detector);
+    // TODO: measure the in-room baseline over a second or so instead.
+    det.setBaseline(-90.0f);
+    sdr::begin(s.freqMhz);
+    session.arm(setup, timer_settings::holdMs(s, esp_random()));
+    currentHeat = heat;
+    currentStage = session.stage();
+    led::set(led::ARMED);
+    ESP_LOGI(TAG, "armed: heat %u, %s", heat, r.mode == race::RACE ? "race" : "practice");
+}
+
+static void armNewHeat(const app::ArmRequest &r, Detector &det)
+{
+    uint16_t heat = settings::nextHeat();
+    settings::setNextHeat((uint16_t)(heat + 1));
+    arm(r, heat, det);
+}
+
+static void handle(const Cmd &c, Detector &det)
+{
+    switch (c.type)
+    {
+    case CMD_ARM:
+        if (!app::armed()) armNewHeat(c.arm, det);
+        break;
+    case CMD_DISARM:
+        if (app::armed()) disarm();
+        break;
+    case CMD_NEW_HEAT:
+        if (!app::armed()) break;
+        session.disarm();
+        armNewHeat(lastArm, det);
+        break;
+    case CMD_RESTART:
+        if (!app::armed()) break;
+        session.disarm();
+        arm(lastArm, currentHeat, det);
+        break;
+    }
+}
+
+static app::ArmRequest buttonArm()
+{
+    app::ArmRequest r = {};
+    r.mode = (race::Mode)settings::get().mode;
+    return r;
 }
 
 extern "C" void app_main()
 {
+    cmds = xQueueCreate(4, sizeof(Cmd));
     settings::begin();
     led::begin();
     button::begin();
@@ -77,24 +151,49 @@ extern "C" void app_main()
 
     uint8_t uid[6];
     vrxc::uidFromBindPhrase(settings::get().bindPhrase, uid);
-    outputs::begin(uid);
+    outputs::setLink((Link)settings::get().link, uid);
     ESP_LOGI(TAG, "UID %02x:%02x:%02x:%02x:%02x:%02x", uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
 
     Detector det(settings::get().detector);
+    led::set(led::IDLE);
+    if (cfg::BOOT_ARMED) armNewHeat(buttonArm(), det);
     uint32_t now = millis();
-    setArmed(cfg::BOOT_ARMED, det, now);
     uint32_t lastHeartbeat = now;
     uint32_t lastRssi = now;
+    bool calibrating = false; // SDR running in idle for "rssi on"
 
     while (true)
     {
         now = millis();
 
+        Cmd c;
+        while (xQueueReceive(cmds, &c, 0) == pdTRUE) handle(c, det);
+
         switch (button::poll(now))
         {
-        case button::LONG_PRESS: setArmed(!isArmed, det, now); break;
-        case button::SHORT_PRESS: lapCount = 0; det.reset(); break; // new session
+        case button::LONG_PRESS:
+            if (app::armed()) disarm();
+            else armNewHeat(buttonArm(), det);
+            break;
+        case button::SHORT_PRESS:
+            if (app::armed()) handle({CMD_NEW_HEAT, {}}, det);
+            break;
         case button::NONE: break;
+        }
+
+        // Live signal for calibration works idle too: the radio is free then.
+        bool wantIdleSdr = !app::armed() && rssiStream;
+        if (wantIdleSdr != calibrating)
+        {
+            calibrating = wantIdleSdr;
+            if (calibrating)
+            {
+                det = Detector(settings::get().detector);
+                det.setBaseline(-90.0f);
+                sdr::begin(settings::get().freqMhz);
+            }
+            else if (!app::armed())
+                sdr::end();
         }
 
         if (simRequested)
@@ -103,26 +202,31 @@ extern "C" void app_main()
             sdr::simulatePass(now);
         }
 
-        if (isArmed)
+        if (app::armed() || calibrating)
         {
             uint32_t passMs, lapMs;
-            if (det.feed(sdr::bandPowerDb(now), now, passMs, lapMs))
+            if (det.feed(sdr::bandPowerDb(now), now, passMs, lapMs) && app::armed())
             {
                 led::flash(now);
-                // The first pass after arming starts lap 1 - nothing to report but the start.
-                if (lapCount++ > 0) emit(frame(lapframe::LAP, lapMs), true);
-                ESP_LOGI(TAG, "pass at %lu, lap %u %lu ms", (unsigned long)passMs, lapCount, (unsigned long)lapMs);
-            }
-            if (now - lastHeartbeat >= cfg::HEARTBEAT_MS)
-            {
-                lastHeartbeat = now;
-                emit(frame(lapframe::HEARTBEAT, now), true);
+                session.pass(passMs); // the session times laps itself (holeshot runs from GO)
+                ESP_LOGI(TAG, "pass at %lu", (unsigned long)passMs);
             }
             if (rssiStream && now - lastRssi >= 50)
             {
                 lastRssi = now;
-                printf("R:%.1f\n", det.smoothed());
+                printf("R:%.1f\n", det.smoothed() - det.baseline());
             }
+        }
+
+        if (app::armed())
+        {
+            session.tick(now);
+            if (now - lastHeartbeat >= cfg::HEARTBEAT_MS)
+            {
+                lastHeartbeat = now;
+                session.heartbeat(now);
+            }
+            currentStage = session.stage();
         }
 
         led::update(now);

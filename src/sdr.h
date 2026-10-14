@@ -17,6 +17,7 @@ namespace sdr
 
 bool begin(uint16_t freqMhz);
 void end(); // release the radio for a transmit burst
+bool running();
 float bandPowerDb(uint32_t nowMs);
 void simulatePass(uint32_t nowMs);
 

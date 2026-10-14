@@ -1,14 +1,27 @@
 #pragma once
-// Line-based config over USB (idle mode). Commands:
-//   get                      print settings
-//   set freq <MHz>           set channel frequency
-//   set pilot <n>
-//   set enter <dB> | exit <dB> | alpha <0..1> | minlap <ms>
-//   set phrase <bind phrase>
+// Line-based config and control over USB. Commands:
+//   get                      print "S:<key>=<value>" lines, then OK
+//                            (all of timer_settings::KEYS, plus heat, state, fw)
+//   set <key> <value>        keys in timer_settings.h, e.g.
+//                              set chan R4 | set freq <MHz>
+//                              set enter <dB> | exit <dB> | alpha <0..1> | minlap <ms>
+//                              set link ble|espnow     (exclusive radio output)
+//                              set phrase <bind phrase>
+//                              set event <name> | set prefix <text> | set heat <next #>
+//                              set msg.event|msg.heat|msg.start|msg.laps|msg.best on|off
+//                              set text.stage|text.go|text.finish <text>
+//                              set mode practice|race  (what BOOT arms)
+//                              set race.limit laps|time | race.laps <n> | race.time <s> | race.hold on|off
 //   save                     persist to flash
 //   defaults                 reset to defaults (not saved)
-//   rssi on|off              stream smoothed band power for calibration
+//   arm practice             start a practice heat (first pass starts lap 1)
+//   arm race [laps <n>|time <s>]  stage a race heat (default: saved race limit)
+//   disarm                   end the heat
+//   heat next                armed: end this heat and start the next one
+//   restart                  armed: run this heat again
+//   rssi on|off              stream "R:<dB above baseline>" for calibration (idle too)
 //   sim                      inject a synthetic gate pass (works armed too)
+// Replies OK or ERR [reason]. Setting changes need the timer idle.
 // Lap/event frames go out as "F:<hex>" lines - see lap_frame.h.
 
 namespace console

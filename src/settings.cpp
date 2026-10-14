@@ -9,16 +9,15 @@
 
 static const char *TAG = "settings";
 static const char *NVS_NS = "lapdog";
-static const uint32_t SETTINGS_VERSION = 1; // bump when the struct layout changes
+static const uint32_t SETTINGS_VERSION = 2; // bump when the struct layout changes
 
 static Settings current;
+static uint16_t heat = 1;
 
 void settings::resetDefaults()
 {
-    memset(&current, 0, sizeof(current));
-    current.freqMhz = cfg::DEFAULT_FREQ_MHZ;
-    current.pilot = 0;
-    current.detector = {cfg::DEFAULT_EMA_ALPHA, cfg::DEFAULT_ENTER_DB, cfg::DEFAULT_EXIT_DB, cfg::DEFAULT_MIN_LAP_MS};
+    current = timer_settings::defaults(
+        cfg::DEFAULT_FREQ_MHZ, {cfg::DEFAULT_EMA_ALPHA, cfg::DEFAULT_ENTER_DB, cfg::DEFAULT_EXIT_DB, cfg::DEFAULT_MIN_LAP_MS});
 }
 
 void settings::begin()
@@ -41,6 +40,7 @@ void settings::begin()
         ESP_LOGI(TAG, "loaded");
     else
         resetDefaults();
+    if (nvs_get_u16(h, "heat", &heat) != ESP_OK || heat == 0) heat = 1;
     nvs_close(h);
 }
 
@@ -54,4 +54,16 @@ bool settings::save()
               nvs_set_blob(h, "cfg", &current, sizeof(current)) == ESP_OK && nvs_commit(h) == ESP_OK;
     nvs_close(h);
     return ok;
+}
+
+uint16_t settings::nextHeat() { return heat; }
+
+void settings::setNextHeat(uint16_t next)
+{
+    heat = next ? next : 1;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u16(h, "heat", heat);
+    nvs_commit(h);
+    nvs_close(h);
 }
