@@ -71,7 +71,21 @@ void test_disarmed_heartbeat_race()
     d.seq = 10;
     d.heat = 4;
     d.lapLimit = 12;
-    assertHex("230A0004000C", d);
+    d.ignored = 2;
+    assertHex("230A0004000C02", d);
+    TEST_ASSERT_EQUAL(2, roundtrip(d).ignored);
+
+    Frame g = {};
+    g.type = IGNORED;
+    g.seq = 11;
+    g.reason = IGNORED_TOO_SOON;
+    g.ms = 1000;
+    g.ignored = 3;
+    assertHex("270B0001E803000003", g);
+    Frame out = roundtrip(g);
+    TEST_ASSERT_EQUAL(IGNORED_TOO_SOON, out.reason);
+    TEST_ASSERT_EQUAL_UINT32(1000, out.ms);
+    TEST_ASSERT_EQUAL(3, out.ignored);
 
     Frame h = {};
     h.type = HEARTBEAT;

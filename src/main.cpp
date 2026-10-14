@@ -93,7 +93,7 @@ static void arm(const app::ArmRequest &r, uint16_t heat, Detector &det)
         else setup.timeS = r.timeS;
     }
     lastArm = r;
-    det = Detector(s.detector);
+    det = Detector(timer_settings::detectorParams(s));
     // TODO: measure the in-room baseline over a second or so instead.
     det.setBaseline(-90.0f);
     sdr::begin(s.freqMhz);
@@ -154,7 +154,7 @@ extern "C" void app_main()
     outputs::setLink((Link)settings::get().link, uid);
     ESP_LOGI(TAG, "UID %02x:%02x:%02x:%02x:%02x:%02x", uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
 
-    Detector det(settings::get().detector);
+    Detector det(timer_settings::detectorParams(settings::get()));
     led::set(led::IDLE);
     if (cfg::BOOT_ARMED) armNewHeat(buttonArm(), det);
     uint32_t now = millis();
@@ -188,7 +188,7 @@ extern "C" void app_main()
             calibrating = wantIdleSdr;
             if (calibrating)
             {
-                det = Detector(settings::get().detector);
+                det = Detector(timer_settings::detectorParams(settings::get()));
                 det.setBaseline(-90.0f);
                 sdr::begin(settings::get().freqMhz);
             }
@@ -204,12 +204,20 @@ extern "C" void app_main()
 
         if (app::armed() || calibrating)
         {
-            uint32_t passMs, lapMs;
-            if (det.feed(sdr::bandPowerDb(now), now, passMs, lapMs) && app::armed())
+            Pass p;
+            PassResult r = det.feed(sdr::bandPowerDb(now), now, p);
+            if (r == PassResult::PASS && app::armed())
             {
                 led::flash(now);
-                session.pass(passMs); // the session times laps itself (holeshot runs from GO)
-                ESP_LOGI(TAG, "pass at %lu", (unsigned long)passMs);
+                session.pass(p.atMs); // the session times laps itself (holeshot runs from GO)
+                ESP_LOGI(TAG, "pass at %lu", (unsigned long)p.atMs);
+            }
+            else if ((r == PassResult::TOO_SOON || r == PassResult::TOO_LONG) && app::armed())
+            {
+                bool soon = r == PassResult::TOO_SOON;
+                session.ignored(soon ? lapframe::IGNORED_TOO_SOON : lapframe::IGNORED_TOO_LONG,
+                                soon ? p.lapMs : p.durationMs);
+                ESP_LOGI(TAG, "pass ignored: %s", soon ? "too soon" : "too long (parked?)");
             }
             if (rssiStream && now - lastRssi >= 50)
             {
@@ -220,7 +228,10 @@ extern "C" void app_main()
 
         if (app::armed())
         {
+            race::Stage before = session.stage();
             session.tick(now);
+            // Laps (and the minimum lap time) count from GO, not from passes while staging.
+            if (before == race::STAGING && session.stage() == race::RACING) det.reset();
             if (now - lastHeartbeat >= cfg::HEARTBEAT_MS)
             {
                 lastHeartbeat = now;

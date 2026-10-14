@@ -243,6 +243,38 @@ void test_disarm()
     TEST_ASSERT_EQUAL(1, r.of(lapframe::DISARMED).size());
 }
 
+void test_ignored_passes_are_reported_and_counted()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(PRACTICE), 0);
+    s.ignored(lapframe::IGNORED_TOO_SOON, 900); // before the first pass: still timing
+    s.pass(1000);
+    r.clear();
+    s.ignored(lapframe::IGNORED_TOO_LONG, 8000);
+    auto ig = r.of(lapframe::IGNORED);
+    TEST_ASSERT_EQUAL(1, ig.size());
+    TEST_ASSERT_EQUAL(lapframe::IGNORED_TOO_LONG, ig[0].reason);
+    TEST_ASSERT_EQUAL_UINT32(8000, ig[0].ms);
+    TEST_ASSERT_EQUAL(2, ig[0].ignored);
+    TEST_ASSERT_EQUAL(1, r.bursts);
+    TEST_ASSERT_EQUAL(0, r.osdRows.size()); // app-only, not a goggle message
+    s.disarm();
+    TEST_ASSERT_EQUAL(2, r.of(lapframe::DISARMED)[0].ignored);
+}
+
+void test_ignored_not_counted_while_staging()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(RACE), 1000);
+    s.ignored(lapframe::IGNORED_TOO_SOON, 500);
+    TEST_ASSERT_EQUAL(0, s.ignoredCount());
+    TEST_ASSERT_EQUAL(0, r.of(lapframe::IGNORED).size());
+    s.arm(setup(PRACTICE), 0); // re-arm resets the count
+    TEST_ASSERT_EQUAL(0, s.ignoredCount());
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -255,5 +287,7 @@ int main()
     RUN_TEST(test_race_lap_limit_finishes);
     RUN_TEST(test_race_time_limit_finishes_on_next_pass);
     RUN_TEST(test_disarm);
+    RUN_TEST(test_ignored_passes_are_reported_and_counted);
+    RUN_TEST(test_ignored_not_counted_while_staging);
     return UNITY_END();
 }

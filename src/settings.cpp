@@ -9,7 +9,7 @@
 
 static const char *TAG = "settings";
 static const char *NVS_NS = "lapdog";
-static const uint32_t SETTINGS_VERSION = 2; // bump when the struct layout changes
+static const uint32_t SETTINGS_VERSION = 3; // bump when the struct layout changes
 
 static Settings current;
 static uint16_t heat = 1;
@@ -17,7 +17,8 @@ static uint16_t heat = 1;
 void settings::resetDefaults()
 {
     current = timer_settings::defaults(
-        cfg::DEFAULT_FREQ_MHZ, {cfg::DEFAULT_EMA_ALPHA, cfg::DEFAULT_ENTER_DB, cfg::DEFAULT_EXIT_DB, cfg::DEFAULT_MIN_LAP_MS});
+        cfg::DEFAULT_FREQ_MHZ, {cfg::DEFAULT_EMA_ALPHA, cfg::DEFAULT_ENTER_DB, cfg::DEFAULT_EXIT_DB, cfg::DEFAULT_MIN_LAP_MS,
+                                       cfg::DEFAULT_MAX_PEAK_MS});
 }
 
 void settings::begin()

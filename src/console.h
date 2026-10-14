@@ -4,7 +4,9 @@
 //                            (all of timer_settings::KEYS, plus heat, state, fw)
 //   set <key> <value>        keys in timer_settings.h, e.g.
 //                              set chan R4 | set freq <MHz>
-//                              set enter <dB> | exit <dB> | alpha <0..1> | minlap <ms>
+//                              set enter <dB> | exit <dB> | alpha <0..1>
+//                              set minlap <ms>         (1000-30000; shorter passes are ignored)
+//                              set park on|off | maxpeak <ms>  (ignore peaks longer than maxpeak)
 //                              set link ble|espnow     (exclusive radio output)
 //                              set phrase <bind phrase>
 //                              set event <name> | set prefix <text> | set heat <next #>

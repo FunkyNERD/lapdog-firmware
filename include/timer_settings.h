@@ -38,6 +38,7 @@ struct Settings
     uint8_t raceLaps;
     uint16_t raceTimeS;
     bool randomHold; // 1-3 s between stage and GO; off = fixed 2 s
+    bool ignoreParked; // reject peaks longer than detector.maxPeakMs (a quad parked at the gate)
 };
 
 namespace timer_settings
@@ -46,6 +47,7 @@ namespace timer_settings
 // Every key "get" prints, in order.
 constexpr const char *KEYS[] = {
     "chan",      "freq",      "pilot",     "enter",      "exit",       "alpha",      "minlap",
+    "park",      "maxpeak",
     "link",      "phrase",    "event",     "prefix",     "msg.event",  "msg.heat",   "msg.start",
     "msg.laps",  "msg.best",  "text.stage", "text.go",   "text.finish", "mode",      "race.limit",
     "race.laps", "race.time", "race.hold",
@@ -67,6 +69,7 @@ inline Settings defaults(uint16_t freqMhz, const DetectorParams &det)
     s.raceLaps = 3;
     s.raceTimeS = 120;
     s.randomHold = true;
+    s.ignoreParked = true;
     return s;
 }
 
@@ -145,8 +148,13 @@ inline bool set(Settings &s, const char *key, const char *v)
     }
     else if (!strcmp(key, "minlap"))
     {
-        if (!parseLong(v, 500, 600000, n)) return false;
+        if (!parseLong(v, 1000, 30000, n)) return false;
         s.detector.minLapMs = (uint32_t)n;
+    }
+    else if (!strcmp(key, "maxpeak"))
+    {
+        if (!parseLong(v, 300, 10000, n)) return false;
+        s.detector.maxPeakMs = (uint32_t)n;
     }
     else if (!strcmp(key, "link"))
     {
@@ -161,7 +169,8 @@ inline bool set(Settings &s, const char *key, const char *v)
     else if (!strcmp(key, "text.go")) return copyText(v, s.msg.go, sizeof(s.msg.go));
     else if (!strcmp(key, "text.finish")) return copyText(v, s.msg.finish, sizeof(s.msg.finish));
     else if (!strcmp(key, "msg.event") || !strcmp(key, "msg.heat") || !strcmp(key, "msg.start") ||
-             !strcmp(key, "msg.laps") || !strcmp(key, "msg.best") || !strcmp(key, "race.hold"))
+             !strcmp(key, "msg.laps") || !strcmp(key, "msg.best") || !strcmp(key, "race.hold") ||
+             !strcmp(key, "park"))
     {
         if (!parseBool(v, b)) return false;
         bool &dst = !strcmp(key, "msg.event")   ? s.msg.event
@@ -169,6 +178,7 @@ inline bool set(Settings &s, const char *key, const char *v)
                     : !strcmp(key, "msg.start") ? s.msg.startFinish
                     : !strcmp(key, "msg.laps")  ? s.msg.laps
                     : !strcmp(key, "msg.best")  ? s.msg.best
+                    : !strcmp(key, "park")      ? s.ignoreParked
                                                 : s.randomHold;
         dst = b;
     }
@@ -209,6 +219,8 @@ inline bool get(const Settings &s, const char *key, char *out, size_t len)
     else if (!strcmp(key, "exit")) snprintf(out, len, "%.1f", s.detector.exitDb);
     else if (!strcmp(key, "alpha")) snprintf(out, len, "%.2f", s.detector.emaAlpha);
     else if (!strcmp(key, "minlap")) snprintf(out, len, "%lu", (unsigned long)s.detector.minLapMs);
+    else if (!strcmp(key, "maxpeak")) snprintf(out, len, "%lu", (unsigned long)s.detector.maxPeakMs);
+    else if (!strcmp(key, "park")) snprintf(out, len, "%s", onOff[s.ignoreParked]);
     else if (!strcmp(key, "link")) snprintf(out, len, "%s", s.link == LINK_ESPNOW ? "espnow" : "ble");
     else if (!strcmp(key, "phrase")) snprintf(out, len, "%s", s.bindPhrase);
     else if (!strcmp(key, "event")) snprintf(out, len, "%s", s.event);
@@ -228,6 +240,14 @@ inline bool get(const Settings &s, const char *key, char *out, size_t len)
     else if (!strcmp(key, "race.hold")) snprintf(out, len, "%s", onOff[s.randomHold]);
     else return false;
     return true;
+}
+
+// The detector a session runs with: the parked-quad limit only when enabled.
+inline DetectorParams detectorParams(const Settings &s)
+{
+    DetectorParams p = s.detector;
+    if (!s.ignoreParked) p.maxPeakMs = 0;
+    return p;
 }
 
 // The session a "arm" starts with these settings. Strings point into s.

@@ -27,7 +27,8 @@ constexpr uint16_t DEFAULT_FREQ_MHZ = 5800;  // mid-band; band edges are less se
 constexpr float DEFAULT_EMA_ALPHA = 0.2f;
 constexpr float DEFAULT_ENTER_DB = 10.0f;    // above the in-room baseline
 constexpr float DEFAULT_EXIT_DB = 5.0f;
-constexpr uint32_t DEFAULT_MIN_LAP_MS = 3000;
+constexpr uint32_t DEFAULT_MIN_LAP_MS = 3000;  // shorter "laps" are a crash or bounce at the gate
+constexpr uint32_t DEFAULT_MAX_PEAK_MS = 1500; // longer peaks are a quad parked at the gate
 constexpr uint32_t SAMPLE_PERIOD_MS = 5;     // ~200 Hz band-power rate
 
 // --- Outputs -----------------------------------------------------------------

@@ -20,9 +20,12 @@
 //             [5..8] ms u32 (lap time; holeshot = GO to first pass; 0 for the practice start)
 //   ARMED     [3] mode u8 (race::Mode)  [4..5] heat u16  [6] lap limit u8 (0 = none)
 //             [7..8] time limit s u16 (0 = none)
-//   DISARMED  [3..4] heat u16  [5] laps completed u8
+//   DISARMED  [3..4] heat u16  [5] laps completed u8  [6] passes ignored u8
 //   HEARTBEAT [3] stage u8 (race::Stage)  [4] mode u8  [5..6] heat u16  [7..10] uptime ms u32
 //   RACE      [3] stage u8  [4..7] race time ms u32 (since GO; 0 before GO)
+//   IGNORED   [3] reason u8 (IGNORED_TOO_SOON, IGNORED_TOO_LONG)
+//             [4..7] ms u32 (too soon: time since the last lap; too long: peak length)
+//             [8] passes ignored so far this heat u8 (so a missed burst doesn't lose the count)
 //   TEXT      [3] slot u8   [4] part (high nibble) | parts (low nibble)
 //             [5..] up to MAX_TEXT_CHUNK bytes of text, no terminator
 //     slot 0..17      VRxC_ELRS OSD row: the same text the goggles show there
@@ -58,7 +61,12 @@ enum Type : uint8_t
     HEARTBEAT = 4,
     RACE = 5,
     TEXT = 6,
+    IGNORED = 7,
 };
+
+// Why a gate pass wasn't counted (false-read protection, see detector.h).
+constexpr uint8_t IGNORED_TOO_SOON = 1; // within the minimum lap time
+constexpr uint8_t IGNORED_TOO_LONG = 2; // peak too long: a parked quad
 
 constexpr uint8_t LAP_BEST = 0x01;  // fastest lap of this heat so far
 constexpr uint8_t LAP_FINAL = 0x02; // this pass finished the race
@@ -84,6 +92,9 @@ struct Frame
     uint16_t heat;
     uint8_t lapLimit; // ARMED; DISARMED: laps completed
     uint16_t timeLimitS;
+    // IGNORED (ms = the reason's time) / DISARMED
+    uint8_t reason;
+    uint8_t ignored; // passes ignored so far this heat
     // TEXT
     uint8_t slot;
     uint8_t part;
@@ -117,10 +128,11 @@ inline size_t bodySize(uint8_t type)
     {
     case LAP: return 6;
     case ARMED: return 6;
-    case DISARMED: return 3;
+    case DISARMED: return 4;
     case HEARTBEAT: return 8;
     case RACE: return 5;
     case TEXT: return 2;
+    case IGNORED: return 6;
     default: return 0;
     }
 }
@@ -152,6 +164,12 @@ inline size_t encode(const Frame &f, uint8_t out[MAX_SIZE])
     case DISARMED:
         put16(b, f.heat);
         b[2] = f.lapLimit;
+        b[3] = f.ignored;
+        break;
+    case IGNORED:
+        b[0] = f.reason;
+        put32(b + 1, f.ms);
+        b[5] = f.ignored;
         break;
     case HEARTBEAT:
         b[0] = f.stage;
@@ -203,6 +221,12 @@ inline bool decode(const uint8_t *in, size_t len, Frame &f)
     case DISARMED:
         f.heat = get16(b);
         f.lapLimit = b[2];
+        f.ignored = b[3];
+        break;
+    case IGNORED:
+        f.reason = b[0];
+        f.ms = get32(b + 1);
+        f.ignored = b[5];
         break;
     case HEARTBEAT:
         f.stage = b[0];

@@ -6,7 +6,7 @@
 
 namespace ts = timer_settings;
 
-static const DetectorParams DET = {0.2f, 10.0f, 5.0f, 3000};
+static const DetectorParams DET = {0.2f, 10.0f, 5.0f, 3000, 1500};
 
 void setUp() {}
 void tearDown() {}
@@ -103,6 +103,22 @@ void test_race_settings_and_setup()
     TEST_ASSERT_EQUAL(2000, ts::holdMs(s, 12345));
 }
 
+void test_false_read_protection()
+{
+    Settings s = ts::defaults(5800, DET);
+    TEST_ASSERT_TRUE(s.ignoreParked);
+    TEST_ASSERT_EQUAL_UINT32(1500, ts::detectorParams(s).maxPeakMs);
+    TEST_ASSERT_TRUE(ts::set(s, "minlap", "4500"));
+    TEST_ASSERT_EQUAL_UINT32(4500, ts::detectorParams(s).minLapMs);
+    TEST_ASSERT_FALSE(ts::set(s, "minlap", "500"));   // app range: 1-30 s
+    TEST_ASSERT_FALSE(ts::set(s, "minlap", "30500"));
+    TEST_ASSERT_TRUE(ts::set(s, "maxpeak", "2000"));
+    TEST_ASSERT_TRUE(ts::set(s, "park", "off"));
+    TEST_ASSERT_EQUAL_UINT32(0, ts::detectorParams(s).maxPeakMs); // disabled
+    TEST_ASSERT_EQUAL_UINT32(2000, s.detector.maxPeakMs);         // but remembered
+    TEST_ASSERT_EQUAL_STRING("off", value(s, "park").c_str());
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -112,5 +128,6 @@ int main()
     RUN_TEST(test_text_and_toggles);
     RUN_TEST(test_thresholds_keep_hysteresis);
     RUN_TEST(test_race_settings_and_setup);
+    RUN_TEST(test_false_read_protection);
     return UNITY_END();
 }

@@ -6,6 +6,8 @@
 //   Race:     arm -> STAGING ("ARM NOW") -> hold (random 1-3 s) -> GO ->
 //             first pass is the holeshot -> laps -> FINISHED when the lap
 //             limit is reached, or on the first pass after the time limit.
+// Both modes: passes the detector rejected (too soon / parked quad) are
+// reported with ignored() and counted per heat, never silently dropped.
 //
 // Everything the session says goes to a Sink as LapDog frames (USB + BLE)
 // and as VRxC_ELRS OSD rows (ESP-NOW to goggles/RacePanel). OSD rows are also
@@ -131,6 +133,7 @@ public:
     Mode mode() const { return setup_.mode; }
     uint16_t heat() const { return setup_.heat; }
     uint8_t lapsDone() const { return lapsDone_; }
+    uint8_t ignoredCount() const { return ignored_; }
     uint32_t bestMs() const { return bestMs_; }
 
     // holdMs: STAGING -> GO delay, counted from the first tick() after arming
@@ -145,6 +148,7 @@ public:
         timeUp_ = false;
         lapsDone_ = 0;
         bestMs_ = 0;
+        ignored_ = 0;
 
         lapframe::Frame f = base(lapframe::ARMED);
         f.mode = s.mode;
@@ -185,6 +189,7 @@ public:
         lapframe::Frame f = base(lapframe::DISARMED);
         f.heat = setup_.heat;
         f.lapLimit = lapsDone_;
+        f.ignored = ignored_;
         sink_.frame(f);
         sink_.flush();
     }
@@ -219,6 +224,21 @@ public:
         // STAGING: false start / sitting at the gate - ignored. FINISHED: done.
     }
 
+    // A peak the detector rejected (lapframe::IGNORED_*). ms: time since the
+    // last lap (too soon) or the peak's length (too long). Only counts while
+    // the heat is timing - not while staging or after the finish.
+    void ignored(uint8_t reason, uint32_t ms)
+    {
+        if (stage_ != PRACTICE_RUN && stage_ != RACING) return;
+        if (ignored_ < 255) ignored_++;
+        lapframe::Frame f = base(lapframe::IGNORED);
+        f.reason = reason;
+        f.ms = ms;
+        f.ignored = ignored_;
+        sink_.frame(f);
+        sink_.flush();
+    }
+
     void heartbeat(uint32_t nowMs)
     {
         lapframe::Frame f = base(lapframe::HEARTBEAT);
@@ -243,6 +263,7 @@ private:
     uint32_t lastPassMs_ = 0;
     uint8_t lapsDone_ = 0;
     uint32_t bestMs_ = 0;
+    uint8_t ignored_ = 0;
 
     lapframe::Frame base(lapframe::Type t)
     {

@@ -46,6 +46,12 @@ pio test -e native
 - **Race:** stage ("ARM NOW") → random 1–3 s hold (`race.hold`) → "GO!" → the first pass is the holeshot → laps → "FINISHED!" at the lap limit, or on the first pass after the time limit.
 - The timer numbers heats itself: every arm takes `heat` and advances it (persisted straight away). `restart` reruns the same heat.
 
+### False-read protection
+
+- **Minimum lap time** (`set minlap <ms>`, 1–30 s, default 3 s): a peak sooner than this after the last lap is a crash into the gate or a bounce back through it, not a lap.
+- **Ignore parked quads** (`set park on|off`, `set maxpeak <ms>`, default on / 1.5 s): a peak longer than this is a quad sitting at the gate; without it, picking the quad up would count a lap.
+- Applies in practice and race. Rejected passes don't move the lap reference, and each one is reported as an `IGNORED` frame (reason + count this heat); `DISARMED` carries the heat's total.
+
 ### Radio output (exclusive)
 
 One RF chain, so `set link ble|espnow` picks **one**: BLE adverts to the LapDog app, or ESP-NOW OSD to goggles and RacePanel. USB always carries everything. The link is brought up when the timer arms, so a change needs no reboot.
