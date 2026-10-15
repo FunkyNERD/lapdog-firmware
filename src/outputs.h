@@ -1,7 +1,7 @@
 #pragma once
 // Lap/event outputs. USB always carries every frame. Over the air, BLE advert
 // bursts (to the LapDog app) and/or ESP-NOW (VRxC_ELRS OSD to goggles and
-// RacePanel), chosen by Settings::links. With both, ESP-NOW goes first - the
+// LapDog LCD), chosen by Settings::links. With both, ESP-NOW goes first - the
 // goggles are what the pilot sees - and BLE follows (~0.5 s later; lap times
 // are timed on the timer, so the delay doesn't change them).
 //

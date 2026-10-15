@@ -293,7 +293,7 @@ void test_disarm()
 
 void test_practice_disarm_finishes_with_total()
 {
-    // Like a race finishing: RacePanel ends the heat and keeps the laps up, no OSD clear.
+    // Like a race finishing: LapDog LCD ends the heat and keeps the laps up, no OSD clear.
     Recorder r;
     Session s(r);
     s.arm(setup(PRACTICE), 0);

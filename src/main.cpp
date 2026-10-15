@@ -139,7 +139,7 @@ static void handle(const Cmd &c, Detector &det)
         break;
     case CMD_NEW_HEAT:
         if (!app::armed()) break;
-        session.disarm(millis()); // finishes this heat, so RacePanel logs it
+        session.disarm(millis()); // finishes this heat, so LapDog LCD logs it
         armNewHeat(lastArm, det);
         break;
     case CMD_RESTART:
@@ -159,6 +159,7 @@ static app::ArmRequest buttonArm()
 
 extern "C" void app_main()
 {
+    ESP_LOGI(TAG, "%s", "LapDog timer v" FIRMWARE_VERSION);
     cmds = xQueueCreate(4, sizeof(Cmd));
     settings::begin();
     led::begin();

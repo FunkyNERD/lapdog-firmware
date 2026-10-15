@@ -10,13 +10,13 @@
 // reported with ignored() and counted per heat, never silently dropped.
 //
 // Everything the session says goes to a Sink as LapDog frames (USB + BLE)
-// and as ELRS Backpack OSD rows (ESP-NOW to goggles/RacePanel). OSD rows are
+// and as ELRS Backpack OSD rows (ESP-NOW to goggles/LapDog LCD). OSD rows are
 // also sent as TEXT frames, so the app shows exactly what the goggles show.
 // flush() marks the end of one radio burst.
 //
 // The OSD messages follow CMRC's live timing (cmrc.asn.au Goggle OSD Layout),
-// the same rows and wording elrs-race-test broadcasts and RacePanel decodes -
-// the row a message is on is what tells RacePanel what it is:
+// the same rows and wording elrs-race-test broadcasts and LapDog LCD decodes -
+// the row a message is on is what tells LapDog LCD what it is:
 //   row 0   event name            "x THURSDAY BACKYARD w"
 //   row 2   heat name             "x HEAT 4 w"
 //   row 3   position & lap        "P1 | L3"   (the lap now being flown)
@@ -31,7 +31,7 @@
 //
 // Ending a heat: a race finishes itself at its limit. Disarming a practice
 // heat (or a race still under way) sends the same FINISHED + result, so
-// RacePanel ends the heat but keeps its laps on screen; the next arm's OSD
+// LapDog LCD ends the heat but keeps its laps on screen; the next arm's OSD
 // clear wipes them. Disarming before any lap has started just clears the OSD.
 
 #include <stddef.h>
@@ -226,7 +226,7 @@ public:
         sink_.flush();
     }
 
-    // finish: end the heat on the OSD with FINISHED and its total (RacePanel
+    // finish: end the heat on the OSD with FINISHED and its total (LapDog LCD
     // keeps the laps up). false abandons it instead - the OSD is just cleared
     // (a restart of the same heat).
     void disarm(uint32_t nowMs, bool finish = true)
@@ -246,7 +246,7 @@ public:
         else if (!finish || was != FINISHED)
         {
             // Nothing timed yet (or abandoned): wipe the goggles, which also
-            // tells RacePanel there's no heat. A finished race keeps its results.
+            // tells LapDog LCD there's no heat. A finished race keeps its results.
             clearStatusAt_ = clearLapResultAt_ = 0;
             osdClear();
         }

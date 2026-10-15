@@ -1,0 +1,38 @@
+[
+    {
+        "id": "c5-mini",
+        "env": "c5_mini",
+        "name": "ESP32-C5 mini (timer)",
+        "chip": "esp32c5",
+        "chipFamily": "ESP32-C5",
+        "description": "The LapDog timer: listens on your 5.8 GHz video channel.",
+        "instructions": [
+            "Plug the board into this computer with a USB-C data cable. It shows up as a USB JTAG/serial port, no driver needed.",
+            "If it isn't found, hold BOOT while you plug it in (or press RESET while holding BOOT), then let go and try again."
+        ]
+    },
+    {
+        "id": "c3-test",
+        "env": "c3_test",
+        "name": "ESP32-C3 SuperMini (test build)",
+        "chip": "esp32c3",
+        "chipFamily": "ESP32-C3",
+        "description": "No SDR: ESP-NOW, Bluetooth, the USB console and the app, with simulated laps.",
+        "instructions": [
+            "Plug the SuperMini into this computer with a USB-C data cable.",
+            "If it isn't found, hold BOOT while you plug it in, then let go and try again."
+        ]
+    },
+    {
+        "id": "c3-oled",
+        "env": "c3_oled",
+        "name": "01Space ESP32-C3 0.42\" OLED (test build)",
+        "chip": "esp32c3",
+        "chipFamily": "ESP32-C3",
+        "description": "The test build with heat and lap times on the board's little OLED.",
+        "instructions": [
+            "Plug the board into this computer with a USB-C data cable.",
+            "If it isn't found, hold BOOT while you plug it in, then let go and try again."
+        ]
+    }
+]

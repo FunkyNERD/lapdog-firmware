@@ -1,0 +1,104 @@
+# Builds a firmware release when a version tag is pushed - cut one with:
+#
+#   tools/release.sh 1.2.3
+#
+# which sets FIRMWARE_VERSION in include/config.h, commits, tags v1.2.3 and pushes.
+# The tag's version is compiled in as FIRMWARE_VERSION, the native tests run, and every device
+# in devices.json is built (tools/build-flash-images.py) and published as a Forgejo release:
+#
+#   <device>-firmware.bin(.sha256)      each device's app image
+#   <device>-factory.bin(.sha256)       each device's full first-install image, flashed at 0x0
+#   flash.json                          the devices and their factory images
+#
+# The LapDog website's browser flasher (lapdog-web, /flash) installs the latest
+# (non-prerelease) release from here. Tags with a suffix (v1.2.3-beta.1) are published as
+# prereleases, which it ignores.
+#
+# vrxc-msp is a private repo pulled over ssh:// in platformio.ini, so the build rewrites that to
+# HTTPS with VRXC_READ_TOKEN (a Forgejo token with read:repository), falling back to the
+# workflow's own token, which is enough if vrxc-msp is public.
+name: Release firmware
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: docker
+    container:
+      image: python:3.12-slim
+    steps:
+      - name: Install tools
+        # nodejs: the checkout/cache steps are JavaScript actions, run inside this container.
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq && apt-get install -y -qq git curl jq nodejs >/dev/null
+          pip install --quiet platformio
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Cache PlatformIO toolchains
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+
+      - name: Fetch vrxc-msp over HTTPS
+        env:
+          READ_TOKEN: ${{ secrets.VRXC_READ_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global url."https://oauth2:${READ_TOKEN}@${GITHUB_SERVER_URL#https://}/".insteadOf "ssh://git@${GITHUB_SERVER_URL#https://}/"
+
+      - name: Work out the version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "::error::Tag $TAG isn't vMAJOR.MINOR.PATCH"; exit 1; }
+          PRERELEASE=false
+          case "$VERSION" in *-*) PRERELEASE=true ;; esac
+          # The tagged commit's default must match, so builds from it over USB report the same
+          # version. tools/release.sh does this; a hand-made tag might not.
+          grep -q "^#define FIRMWARE_VERSION \"$VERSION\"$" include/config.h || {
+            echo "::error::include/config.h's FIRMWARE_VERSION doesn't match $TAG - cut releases with tools/release.sh"; exit 1; }
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_ENV"
+
+      - name: Native tests
+        run: pio test -e native
+
+      - name: Build firmware
+        run: |
+          python3 tools/build-flash-images.py "${VERSION}"
+          cat dist/flash.json
+
+      - name: Release notes
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          {
+            echo "LapDog timer firmware ${VERSION}."
+            echo
+            if [ -n "$PREV" ]; then echo "Changes since ${PREV}:"; git log --pretty='- %s' "${PREV}..${TAG}"; else git log --pretty='- %s' -20 "${TAG}"; fi
+          } > notes.md
+          cat notes.md
+
+      - name: Publish release
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          BODY=$(jq -n --arg tag "$TAG" --arg name "LapDog timer firmware ${VERSION}" --rawfile body notes.md \
+            --argjson pre "$PRERELEASE" '{tag_name: $tag, name: $name, body: $body, prerelease: $pre}')
+          ID=$(curl -fsS -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
+            -d "$BODY" "${API}/releases" | jq -r .id)
+          for f in dist/*; do
+            name=$(basename "$f")
+            curl -fsS -X POST -H "Authorization: token ${TOKEN}" -F "attachment=@${f}" "${API}/releases/${ID}/assets?name=${name}" >/dev/null
+          done
+          echo "Published release ${ID} for ${TAG}"

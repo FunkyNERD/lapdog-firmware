@@ -2,11 +2,13 @@
 
 > Sits by the gate. Barks on every lap.
 
-LapDog timer firmware for a mini **ESP32-C5** board: listens on a 5.8 GHz video channel with ESP-SDR, detects the RSSI peak as the drone passes the gate, and reports laps and race messages over USB plus **either** BLE **or** ESP-NOW (VRxC_ELRS OSD on HDZero goggles and RacePanel). Design notes are in the project-level `CLAUDE.md`.
+LapDog timer firmware for a mini **ESP32-C5** board: listens on a 5.8 GHz video channel with ESP-SDR, detects the RSSI peak as the drone passes the gate, and reports laps and race messages over USB plus **either** BLE **or** ESP-NOW (VRxC_ELRS OSD on HDZero goggles and LapDog LCD). Design notes are in the project-level `CLAUDE.md`.
 
 **Status: skeleton.** Practice and race sessions, heat numbering, settings, USB, ESP-NOW and the NimBLE advert burst are written; nothing radio-side has run on hardware yet. The SDR is a stub that returns a noise floor plus synthetic passes (`sim`).
 
 ## Build
+
+The easiest way onto a board is the browser flasher at https://lapdog.funkynerd.com/flash (Chrome or Edge), which installs the latest release. To build it yourself:
 
 PlatformIO + ESP-IDF via the [pioarduino](https://github.com/pioarduino/platform-espressif32) platform (upstream has no C5 support).
 
@@ -49,6 +51,12 @@ Both boards have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 
 
 `vrxc-msp` comes from Forgejo over SSH. To work on it alongside this repo, switch the `lib_deps` line in `platformio.ini` to `symlink://../vrxc-msp`.
 
+### Releases
+
+`tools/release.sh 1.2.3` sets `FIRMWARE_VERSION` in `include/config.h`, commits, tags `v1.2.3` and pushes. The tag runs `.forgejo/workflows/release.yml`: the native tests, then `tools/build-flash-images.py` builds every device in `devices.json` and publishes a Forgejo release with each one's `<id>-firmware.bin` and `<id>-factory.bin` (bootloader, partition table and app merged to flash at 0x0; offsets come from PlatformIO, and the C5's bootloader is at 0x2000), `.sha256` files and a `flash.json`. lapdog-web's `/flash` installs the latest non-prerelease. A suffixed tag (`v1.2.3-beta.1`) is published as a prerelease, which the flasher ignores. The version shows in `get` (`S:fw=`) and the boot log.
+
+The workflow pulls `vrxc-msp` over HTTPS with the `VRXC_READ_TOKEN` secret (a Forgejo token with `read:repository`), since it's private.
+
 ## Layout
 
 | Path | What |
@@ -73,7 +81,7 @@ Both boards have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 
 
 ### Sessions
 
-- **Practice:** the first gate pass starts lap 1; laps until disarmed. Disarming sends FINISHED and the total (first pass to last pass), like a race finish, so RacePanel ends the heat and keeps the laps on screen.
+- **Practice:** the first gate pass starts lap 1; laps until disarmed. Disarming sends FINISHED and the total (first pass to last pass), like a race finish, so LapDog LCD ends the heat and keeps the laps on screen.
 - **Race:** stage ("ARM NOW") → random 1–3 s hold (`race.hold`) → "GO!" → the first pass is the holeshot → laps → "FINISHED!" at the lap limit, or on the first pass after the time limit.
 - The timer numbers heats itself: every arm takes `heat` and advances it (persisted straight away). `restart` reruns the same heat.
 
@@ -85,11 +93,11 @@ Both boards have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 
 
 ### Radio output
 
-`set ble on|off` (BLE adverts to the LapDog app) and `set espnow on|off` (ESP-NOW OSD to goggles and RacePanel) are independent: either, both or neither. USB always carries everything. Links are brought up when the timer arms, so a change needs no reboot.
+`set ble on|off` (BLE adverts to the LapDog app) and `set espnow on|off` (ESP-NOW OSD to goggles and LapDog LCD) are independent: either, both or neither. USB always carries everything. Links are brought up when the timer arms, so a change needs no reboot.
 
 With both on, IDF's Wi-Fi/BT coexistence shares the 2.4 GHz radio and each burst sends ESP-NOW first (the goggles are what the pilot is watching), then BLE - so the app hears a lap ~0.5 s after the goggles. Lap times are timed on the timer, so that delay doesn't change them.
 
-Race messages go to every link that's on. On ESP-NOW they're ELRS Backpack OSD rows in CMRC live timing's format, the same rows and wording elrs-race-test sends and RacePanel decodes (the row tells RacePanel what a message is):
+Race messages go to every link that's on. On ESP-NOW they're ELRS Backpack OSD rows in CMRC live timing's format, the same rows and wording elrs-race-test sends and LapDog LCD decodes (the row tells LapDog LCD what a message is):
 
 | Row | Message | Example |
 | --- | --- | --- |
@@ -100,7 +108,7 @@ Race messages go to every link that's on. On ESP-NOW they're ELRS Backpack OSD r
 | 6–7 | Race result (total from GO) | `P1` / `T1:02.31` |
 | 15 | Lap time & total from the start pass (cleared after 4 s) | `x L2:17.62 \| T35.24 w` |
 
-Text is centred on the 50-column OSD, rows are cleared with 50 NULs, and frames go out 8 ms apart. GO, and each arm, clear the whole OSD. Disarming a heat that's timing sends FINISHED and the result (practice: first pass to last pass; race: GO to last pass), so RacePanel ends it but keeps the laps up; a finished race keeps its results, and `restart` (or disarming before any lap) just clears. On BLE/USB the same row text goes out as LapDog `TEXT` frames (the app drops the `w`/`x` glyph letters), alongside the structured `ARMED`/`LAP`/`RACE` frames.
+Text is centred on the 50-column OSD, rows are cleared with 50 NULs, and frames go out 8 ms apart. GO, and each arm, clear the whole OSD. Disarming a heat that's timing sends FINISHED and the result (practice: first pass to last pass; race: GO to last pass), so LapDog LCD ends it but keeps the laps up; a finished race keeps its results, and `restart` (or disarming before any lap) just clears. On BLE/USB the same row text goes out as LapDog `TEXT` frames (the app drops the `w`/`x` glyph letters), alongside the structured `ARMED`/`LAP`/`RACE` frames.
 
 ## USB protocol
 

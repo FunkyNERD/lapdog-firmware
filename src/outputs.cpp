@@ -34,7 +34,7 @@ static uint8_t activeUid[6];
 static void espnowStart(const uint8_t uid[6])
 {
     // Like the ELRS backpack: our own MAC *is* the bind-phrase UID, and the
-    // goggles/RacePanel accept frames from it.
+    // goggles/LapDog LCD accept frames from it.
     static bool netifReady = false;
     if (!netifReady)
     {

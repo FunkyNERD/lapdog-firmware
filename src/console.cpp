@@ -5,13 +5,12 @@
 #include <string.h>
 
 #include "app.h"
+#include "config.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "settings.h"
-
-static const char *FW_VERSION = "0.2.0";
 
 static void printSettings()
 {
@@ -22,7 +21,7 @@ static void printSettings()
     printf("S:heat=%u\n", settings::nextHeat());
     const char *state = !app::armed() ? "idle" : app::stage() == race::PRACTICE_RUN ? "practice" : "race";
     printf("S:state=%s\n", state);
-    printf("S:fw=%s\n", FW_VERSION);
+    printf("S:fw=%s\n", FIRMWARE_VERSION);
 }
 
 static bool handleArm()

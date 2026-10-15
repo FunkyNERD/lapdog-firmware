@@ -20,7 +20,7 @@
 enum Link : uint8_t
 {
     LINK_BLE = 1 << 0,    // BLE advert bursts to the LapDog app
-    LINK_ESPNOW = 1 << 1, // VRxC_ELRS OSD to goggles / RacePanel
+    LINK_ESPNOW = 1 << 1, // VRxC_ELRS OSD to goggles / LapDog LCD
 };
 
 struct Settings
