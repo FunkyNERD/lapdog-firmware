@@ -97,12 +97,12 @@ Race messages go to every link that's on. On ESP-NOW they're ELRS Backpack OSD r
 | --- | --- | --- |
 | 0 | Event name | `x THURSDAY BACKYARD w` |
 | 2 | Heat name | `x HEAT 4 w` |
-| 3 | Position & lap being flown | `P1 \| L3` |
+| 3 | Position & lap being flown (cleared after 3 s) | `P1 \| L3` |
 | 5 | Status (cleared after 0.5 s for GO, 2 s for FINISHED) | `w ARM NOW x`, `w GO! x`, `w FINISHED! x` |
-| 6–7 | Race result (total from GO) | `P1` / `T1:02.31` |
+| 6–7 | Race result (total from GO; cleared at disarm, or 2 s after a disarm that ends the heat) | `P1` / `T1:02.31` |
 | 15 | Lap time & total from the start pass (cleared after 4 s) | `x L2:17.62 \| T35.24 w` |
 
-Text is centred on the 50-column OSD, rows are cleared with 50 NULs, and frames go out 8 ms apart. GO, and each arm, clear the whole OSD. Disarming a heat that's timing sends FINISHED and the result (practice: first pass to last pass; race: GO to last pass), so LapDog LCD ends it but keeps the laps up; a finished race keeps its results, and `restart` (or disarming before any lap) just clears. On BLE/USB the same row text goes out as LapDog `TEXT` frames (the app drops the `w`/`x` glyph letters), alongside the structured `ARMED`/`LAP`/`RACE` frames.
+Text is centred on the 50-column OSD, rows are cleared with 50 NULs, and frames go out 8 ms apart. GO, and each arm, clear the whole OSD. Disarming a heat that's timing sends FINISHED and the result (practice: first pass to last pass; race: GO to last pass), so LapDog LCD ends it but keeps the laps up, and blanks the result again 2 s later with FINISHED. A race that finished at its limit keeps its result up until it's disarmed, which blanks it. Rows are taken down with blank text, never a whole-OSD clear, because LapDog LCD wipes its race panel on an OSD clear but ignores a blank row. `restart` (or disarming before any lap) just clears. On BLE/USB the same row text goes out as LapDog `TEXT` frames (the app drops the `w`/`x` glyph letters), alongside the structured `ARMED`/`LAP`/`RACE` frames.
 
 ## USB protocol
 

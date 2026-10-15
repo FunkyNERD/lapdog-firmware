@@ -179,14 +179,55 @@ void test_lap_result_and_status_clear_after_a_while()
     s.pass(1000);
     s.pass(16000);
     r.clear();
-    s.tick(19999);
+    s.tick(18999);
     TEST_ASSERT_EQUAL(0, r.osdRows.size());
-    s.tick(20000); // LAP_RESULT_UPTIME_MS after the pass
+    s.tick(19000); // LAP_LINE_UPTIME_MS after the pass: lap line goes first
     TEST_ASSERT_EQUAL(1, r.osdRows.size());
-    TEST_ASSERT_EQUAL_STRING("15:", r.osdRows[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("3:", r.osdRows[0].c_str());
     TEST_ASSERT_EQUAL(1, r.bursts);
-    s.tick(30000); // only once
+    s.tick(19999);
     TEST_ASSERT_EQUAL(1, r.osdRows.size());
+    s.tick(20000); // LAP_RESULT_UPTIME_MS after the pass
+    TEST_ASSERT_EQUAL(2, r.osdRows.size());
+    TEST_ASSERT_EQUAL_STRING("15:", r.osdRows[1].c_str());
+    TEST_ASSERT_EQUAL(2, r.bursts);
+    s.tick(30000); // only once
+    TEST_ASSERT_EQUAL(2, r.osdRows.size());
+    TEST_ASSERT_EQUAL(0, r.clears - 1); // only the arm's OSD clear, never one to take rows down
+}
+
+void test_lap_line_clears_after_3s_each_lap()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(PRACTICE), 0);
+    s.pass(1000); // start pass: "P1 | L1"
+    r.clear();
+    s.tick(3999);
+    TEST_ASSERT_FALSE(hasRow(r, "3:"));
+    s.tick(4000);
+    TEST_ASSERT_TRUE(hasRow(r, "3:"));
+    s.pass(16000); // lap 1 done: "P1 | L2", rescheduled from this pass
+    r.clear();
+    s.tick(18999);
+    TEST_ASSERT_FALSE(hasRow(r, "3:"));
+    s.tick(19000);
+    TEST_ASSERT_TRUE(hasRow(r, "3:"));
+    TEST_ASSERT_EQUAL(1, r.clears); // the arm's only
+}
+
+void test_lap_line_off_schedules_nothing()
+{
+    Recorder r;
+    Session s(r);
+    Setup st = setup(PRACTICE);
+    st.msg.laps = false;
+    s.arm(st, 0);
+    s.pass(1000);
+    s.pass(16000);
+    r.clear();
+    s.tick(60000);
+    TEST_ASSERT_EQUAL(0, r.osdRows.size());
 }
 
 void test_race_stage_hold_go()
@@ -314,10 +355,18 @@ void test_practice_disarm_finishes_with_total()
     r.clear();
     s.tick(32999);
     TEST_ASSERT_FALSE(hasRow(r, "5:"));
-    s.tick(33000); // FINISHED clears after FINISH_UPTIME_MS, idle or not
+    TEST_ASSERT_FALSE(hasRow(r, "6:"));
+    s.tick(33000); // FINISHED and the result clear after FINISH_UPTIME_MS, idle or not
     TEST_ASSERT_TRUE(hasRow(r, "5:"));
+    TEST_ASSERT_TRUE(hasRow(r, "6:"));
+    TEST_ASSERT_TRUE(hasRow(r, "7:"));
+    TEST_ASSERT_FALSE(hasRow(r, "3:")); // finish() already took the lap line down
     s.tick(34000); // and the last lap result 4 s after its pass
     TEST_ASSERT_TRUE(hasRow(r, "15:"));
+    TEST_ASSERT_EQUAL(clears, r.clears); // blank rows only: LapDog LCD keeps its panel
+    r.clear();
+    s.tick(60000); // nothing left to clear
+    TEST_ASSERT_EQUAL(0, r.osdRows.size());
 }
 
 void test_disarm_before_any_lap_clears()
@@ -359,9 +408,12 @@ void test_race_disarm_mid_race_finishes_from_go()
     s.disarm(25000);
     TEST_ASSERT_TRUE(hasRow(r, "5:w FINISHED! x"));
     TEST_ASSERT_TRUE(hasRow(r, "7:T19.30")); // GO to the last pass
+    s.tick(27000);
+    TEST_ASSERT_TRUE(hasRow(r, "6:"));
+    TEST_ASSERT_TRUE(hasRow(r, "7:"));
 }
 
-void test_finished_race_disarm_keeps_results()
+void test_finished_race_keeps_result_until_disarm()
 {
     Recorder r;
     Session s(r);
@@ -371,11 +423,53 @@ void test_finished_race_disarm_keeps_results()
     s.pass(4000);
     s.pass(19000); // finished
     r.clear();
+    s.tick(29000); // still armed: the result stays up
+    TEST_ASSERT_FALSE(hasRow(r, "6:"));
+    TEST_ASSERT_FALSE(hasRow(r, "7:"));
+    r.clear();
     int clears = r.clears;
-    s.disarm(30000);
+    s.disarm(30000); // blanked at once, in the DISARMED burst
     TEST_ASSERT_EQUAL(clears, r.clears);
-    TEST_ASSERT_EQUAL(0, r.osdRows.size());
+    TEST_ASSERT_EQUAL(2, r.osdRows.size());
+    TEST_ASSERT_EQUAL_STRING("6:", r.osdRows[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("7:", r.osdRows[1].c_str());
     TEST_ASSERT_EQUAL(1, r.of(lapframe::DISARMED).size());
+    TEST_ASSERT_EQUAL(1, r.bursts);
+    r.clear();
+    s.tick(60000);
+    TEST_ASSERT_EQUAL(0, r.osdRows.size());
+}
+
+void test_results_off_disarm_clears_nothing()
+{
+    Recorder r;
+    Session s(r);
+    Setup st = setup(RACE, LIMIT_LAPS, 1);
+    st.msg.startFinish = false;
+    s.arm(st, 0);
+    s.tick(0);
+    s.tick(0);
+    s.pass(4000);
+    s.pass(19000);
+    r.clear();
+    s.disarm(30000);
+    TEST_ASSERT_FALSE(hasRow(r, "6:"));
+    s.tick(60000);
+    TEST_ASSERT_FALSE(hasRow(r, "6:"));
+}
+
+void test_rearm_cancels_pending_clears()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(PRACTICE), 0);
+    s.pass(1000);
+    s.pass(16000);
+    s.disarm(17000); // results due to clear at 19000
+    s.arm(setup(PRACTICE), 0);
+    r.clear();
+    s.tick(25000);
+    TEST_ASSERT_EQUAL(0, r.osdRows.size());
 }
 
 void test_ignored_passes_are_reported_and_counted()
@@ -419,6 +513,8 @@ int main()
     RUN_TEST(test_practice_first_pass_starts_lap_1);
     RUN_TEST(test_best_is_app_only);
     RUN_TEST(test_lap_result_and_status_clear_after_a_while);
+    RUN_TEST(test_lap_line_clears_after_3s_each_lap);
+    RUN_TEST(test_lap_line_off_schedules_nothing);
     RUN_TEST(test_race_stage_hold_go);
     RUN_TEST(test_race_lap_limit_finishes);
     RUN_TEST(test_race_time_limit_finishes_on_next_pass);
@@ -427,7 +523,9 @@ int main()
     RUN_TEST(test_disarm_before_any_lap_clears);
     RUN_TEST(test_restart_abandons);
     RUN_TEST(test_race_disarm_mid_race_finishes_from_go);
-    RUN_TEST(test_finished_race_disarm_keeps_results);
+    RUN_TEST(test_finished_race_keeps_result_until_disarm);
+    RUN_TEST(test_results_off_disarm_clears_nothing);
+    RUN_TEST(test_rearm_cancels_pending_clears);
     RUN_TEST(test_ignored_passes_are_reported_and_counted);
     RUN_TEST(test_ignored_not_counted_while_staging);
     return UNITY_END();

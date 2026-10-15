@@ -19,20 +19,25 @@
 // the row a message is on is what tells LapDog LCD what it is:
 //   row 0   event name            "x THURSDAY BACKYARD w"
 //   row 2   heat name             "x HEAT 4 w"
-//   row 3   position & lap        "P1 | L3"   (the lap now being flown)
+//   row 3   position & lap        "P1 | L3"   (the lap now being flown; cleared after 3 s)
 //   row 5   status                "w ARM NOW x" / "w GO! x" / "w FINISHED! x"
 //   row 6-7 race result           "P1" / "T1:02.31"   (total from GO)
 //   row 15  lap time & total      "x L2:17.62 | T35.24 w"   (total from the start pass)
 // Times are CMRC's: hundredths, minutes only once there are any. On the HDZero
-// font the lone lower-case 'w' and 'x' draw as decorative glyphs. GO, lap
-// results and FINISHED are cleared again after a while (tick(), which keeps
-// running after disarm for that), like the timers do. LapDog is a single-pilot
-// timer, so the position is always P1.
+// font the lone lower-case 'w' and 'x' draw as decorative glyphs. GO, the lap
+// line, lap results and FINISHED are cleared again after a while (tick(),
+// which keeps running after disarm for that), like the timers do. Rows are
+// cleared with blank text, never a full OSD clear: LapDog LCD ignores a blank
+// row but wipes its race panel on an OSD clear, so a blank row takes the text
+// off the goggles while LapDog LCD keeps what it has. LapDog is a
+// single-pilot timer, so the position is always P1.
 //
-// Ending a heat: a race finishes itself at its limit. Disarming a practice
+// Ending a heat: a race finishes itself at its limit and keeps its result
+// (rows 6-7) up until it's disarmed, which blanks them. Disarming a practice
 // heat (or a race still under way) sends the same FINISHED + result, so
-// LapDog LCD ends the heat but keeps its laps on screen; the next arm's OSD
-// clear wipes them. Disarming before any lap has started just clears the OSD.
+// LapDog LCD and the app get them, then blanks them with FINISHED. LapDog LCD
+// ends the heat but keeps its laps on screen either way. Disarming before any
+// lap has started just clears the OSD.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -76,6 +81,8 @@ constexpr uint8_t ROW_LAP_RESULT = 15; // lap time & race total
 constexpr uint32_t GO_UPTIME_MS = 500;
 constexpr uint32_t FINISH_UPTIME_MS = 2000;
 constexpr uint32_t LAP_RESULT_UPTIME_MS = 4000;
+constexpr uint32_t LAP_LINE_UPTIME_MS = 3000;
+constexpr uint32_t RESULTS_UPTIME_MS = FINISH_UPTIME_MS; // a disarm's result, rows 6-7
 
 constexpr size_t EVENT_MAX = 40;
 constexpr size_t PREFIX_MAX = 16;
@@ -184,7 +191,7 @@ public:
         setup_ = s;
         stage_ = s.mode == RACE ? STAGING : PRACTICE_RUN;
         holdMs_ = holdMs;
-        clearStatusAt_ = clearLapResultAt_ = 0;
+        clearStatusAt_ = clearLapResultAt_ = clearLapLineAt_ = clearResultsAt_ = 0;
         goScheduled_ = false;
         started_ = false;
         timeUp_ = false;
@@ -226,9 +233,9 @@ public:
         sink_.flush();
     }
 
-    // finish: end the heat on the OSD with FINISHED and its total (LapDog LCD
-    // keeps the laps up). false abandons it instead - the OSD is just cleared
-    // (a restart of the same heat).
+    // finish: end the heat on the OSD with FINISHED and its total, cleared
+    // again shortly after (LapDog LCD keeps the laps up). false abandons it
+    // instead - the OSD is just cleared (a restart of the same heat).
     void disarm(uint32_t nowMs, bool finish = true)
     {
         if (!armed()) return;
@@ -241,13 +248,22 @@ public:
         sink_.frame(f);
         bool timing = (was == PRACTICE_RUN || was == RACING) && started_;
         if (finish && timing)
+        {
             // Total to the last gate pass: from the first pass (practice) or GO (race).
             this->finish(lastPassMs_ - (was == RACING ? goMs_ : startPassMs_), nowMs);
-        else if (!finish || was != FINISHED)
+            if (setup_.msg.startFinish) schedule(clearResultsAt_, nowMs + RESULTS_UPTIME_MS);
+        }
+        else if (finish && was == FINISHED)
+        {
+            // A race that finished at its limit: its result has been up since,
+            // and goes now. Blank rows, so LapDog LCD keeps its panel.
+            if (setup_.msg.startFinish) clearResults();
+        }
+        else
         {
             // Nothing timed yet (or abandoned): wipe the goggles, which also
-            // tells LapDog LCD there's no heat. A finished race keeps its results.
-            clearStatusAt_ = clearLapResultAt_ = 0;
+            // tells LapDog LCD there's no heat.
+            clearStatusAt_ = clearLapResultAt_ = clearLapLineAt_ = clearResultsAt_ = 0;
             osdClear();
         }
         sink_.flush();
@@ -257,6 +273,12 @@ public:
     {
         bool cleared = expire(clearStatusAt_, ROW_STATUS, nowMs);
         cleared = expire(clearLapResultAt_, ROW_LAP_RESULT, nowMs) || cleared;
+        cleared = expire(clearLapLineAt_, ROW_LAP, nowMs) || cleared;
+        if (clearResultsAt_ && (int32_t)(nowMs - clearResultsAt_) >= 0)
+        {
+            clearResults();
+            cleared = true;
+        }
         if (cleared) sink_.flush();
 
         if (stage_ == STAGING)
@@ -326,6 +348,8 @@ private:
     uint32_t holdMs_ = 0;
     uint32_t clearStatusAt_ = 0;     // 0 = nothing scheduled
     uint32_t clearLapResultAt_ = 0;
+    uint32_t clearLapLineAt_ = 0;
+    uint32_t clearResultsAt_ = 0;
     uint32_t startPassMs_ = 0;       // practice first pass / race holeshot: lap totals count from here
     bool goScheduled_ = false;
     uint32_t goMs_ = 0;
@@ -391,12 +415,23 @@ private:
         return true;
     }
 
-    void lapLine(uint8_t lap)
+    // Row 3 for the lap starting at passMs; it's only on the goggles briefly
+    // (LapDog LCD has the lap number by then and ignores the blank row).
+    void lapLine(uint8_t lap, uint32_t passMs)
     {
         if (!setup_.msg.laps) return;
         char text[16];
         lapLineText(lap, text, sizeof(text));
         row(ROW_LAP, text);
+        schedule(clearLapLineAt_, passMs + LAP_LINE_UPTIME_MS);
+    }
+
+    // Blanks the race result, rows 6-7.
+    void clearResults()
+    {
+        clearResultsAt_ = 0;
+        row(ROW_RESULTS, "");
+        row(ROW_RESULTS + 1, "");
     }
 
     void raceFrame(uint32_t raceMs)
@@ -429,7 +464,7 @@ private:
         if (setup_.msg.laps)
         {
             // The finishing lap's row 3 is cleared by finish() instead.
-            if (!final) lapLine((uint8_t)(lapsDone_ + 1));
+            if (!final) lapLine((uint8_t)(lapsDone_ + 1), passMs);
             char text[40];
             lapResultText(lapsDone_, ms, passMs - startPassMs_, text, sizeof(text));
             row(ROW_LAP_RESULT, text);
@@ -442,7 +477,11 @@ private:
     // atMs: when it was sent (FINISHED clears FINISH_UPTIME_MS later).
     void finish(uint32_t totalMs, uint32_t atMs)
     {
-        if (setup_.msg.laps) row(ROW_LAP, "");
+        if (setup_.msg.laps)
+        {
+            clearLapLineAt_ = 0;
+            row(ROW_LAP, "");
+        }
         if (!setup_.msg.startFinish) return;
         status(setup_.msg.finish);
         schedule(clearStatusAt_, atMs + FINISH_UPTIME_MS);
@@ -460,7 +499,7 @@ private:
             started_ = true;
             lastPassMs_ = startPassMs_ = passMs;
             lapFrame(0, 0, 0);
-            lapLine(1);
+            lapLine(1, passMs);
         }
         else
             completeLap(passMs, false);
@@ -475,7 +514,7 @@ private:
             started_ = true;
             lastPassMs_ = startPassMs_ = passMs;
             lapFrame(0, 0, passMs - goMs_); // holeshot
-            lapLine(1);
+            lapLine(1, passMs);
             sink_.flush();
             return;
         }
