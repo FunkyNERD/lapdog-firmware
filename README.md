@@ -69,7 +69,18 @@ Both boards have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 
 
 One RF chain, so `set link ble|espnow` picks **one**: BLE adverts to the LapDog app, or ESP-NOW OSD to goggles and RacePanel. USB always carries everything. The link is brought up when the timer arms, so a change needs no reboot.
 
-Race messages go to whichever link is selected. On ESP-NOW they're VRxC_ELRS OSD rows: event 0, heat 2, status 5, lap result 15 (e.g. `L1:0:14.630 | BEST`). On BLE/USB they're LapDog `TEXT` frames carrying the same row text, alongside the structured `ARMED`/`LAP`/`RACE` frames.
+Race messages go to whichever link is selected. On ESP-NOW they're ELRS Backpack OSD rows in CMRC live timing's format, the same rows and wording elrs-race-test sends and RacePanel decodes (the row tells RacePanel what a message is):
+
+| Row | Message | Example |
+| --- | --- | --- |
+| 0 | Event name | `x THURSDAY BACKYARD w` |
+| 2 | Heat name | `x HEAT 4 w` |
+| 3 | Position & lap being flown | `P1 \| L3` |
+| 5 | Status (cleared after 0.5 s for GO, 2 s for FINISHED) | `w ARM NOW x`, `w GO! x`, `w FINISHED! x` |
+| 6–7 | Race result (total from GO) | `P1` / `T1:02.31` |
+| 15 | Lap time & total from the start pass (cleared after 4 s) | `x L2:17.62 \| T35.24 w` |
+
+Text is centred on the 50-column OSD, rows are cleared with 50 NULs, and frames go out 8 ms apart. GO and disarm clear the whole OSD. On BLE/USB the same row text goes out as LapDog `TEXT` frames (the app drops the `w`/`x` glyph letters), alongside the structured `ARMED`/`LAP`/`RACE` frames.
 
 ## USB protocol
 

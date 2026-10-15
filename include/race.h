@@ -10,11 +10,23 @@
 // reported with ignored() and counted per heat, never silently dropped.
 //
 // Everything the session says goes to a Sink as LapDog frames (USB + BLE)
-// and as VRxC_ELRS OSD rows (ESP-NOW to goggles/RacePanel). OSD rows are also
-// sent as TEXT frames, so the app shows exactly what the goggles show.
+// and as ELRS Backpack OSD rows (ESP-NOW to goggles/RacePanel). OSD rows are
+// also sent as TEXT frames, so the app shows exactly what the goggles show.
 // flush() marks the end of one radio burst.
 //
-// OSD rows: event 0, heat 2, status 5 (stage/GO/finish), lap result 15.
+// The OSD messages follow CMRC's live timing (cmrc.asn.au Goggle OSD Layout),
+// the same rows and wording elrs-race-test broadcasts and RacePanel decodes -
+// the row a message is on is what tells RacePanel what it is:
+//   row 0   event name            "x THURSDAY BACKYARD w"
+//   row 2   heat name             "x HEAT 4 w"
+//   row 3   position & lap        "P1 | L3"   (the lap now being flown)
+//   row 5   status                "w ARM NOW x" / "w GO! x" / "w FINISHED! x"
+//   row 6-7 race result           "P1" / "T1:02.31"   (total from GO)
+//   row 15  lap time & total      "x L2:17.62 | T35.24 w"   (total from the start pass)
+// Times are CMRC's: hundredths, minutes only once there are any. On the HDZero
+// font the lone lower-case 'w' and 'x' draw as decorative glyphs. GO, lap
+// results and FINISHED are cleared again after a while (tick()), like the
+// timers do. LapDog is a single-pilot timer, so the position is always P1.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -49,8 +61,15 @@ enum Limit : uint8_t
 
 constexpr uint8_t ROW_EVENT = 0;
 constexpr uint8_t ROW_HEAT = 2;
-constexpr uint8_t ROW_STATUS = 5;
-constexpr uint8_t ROW_LAP = 15;
+constexpr uint8_t ROW_LAP = 3;         // position & current lap
+constexpr uint8_t ROW_STATUS = 5;      // stage / GO / finished
+constexpr uint8_t ROW_RESULTS = 6;     // "P1", then the total on the next row
+constexpr uint8_t ROW_LAP_RESULT = 15; // lap time & race total
+
+// How long these stay up before the row is cleared again.
+constexpr uint32_t GO_UPTIME_MS = 500;
+constexpr uint32_t FINISH_UPTIME_MS = 2000;
+constexpr uint32_t LAP_RESULT_UPTIME_MS = 4000;
 
 constexpr size_t EVENT_MAX = 40;
 constexpr size_t PREFIX_MAX = 16;
@@ -62,9 +81,9 @@ struct Messages
 {
     bool event;       // event name on row 0
     bool heat;        // "HEAT 4" on row 2
-    bool startFinish; // stage / GO / finish on row 5 (race mode only)
-    bool laps;        // each lap on row 15
-    bool best;        // " | BEST" on a new best lap
+    bool startFinish; // stage / GO / finish on row 5, result on rows 6-7 (race mode only)
+    bool laps;        // position & lap on row 3, each lap's time on row 15
+    bool best;        // app only: CMRC's lap row has no room for a callout (LAP frames carry LAP_BEST)
     char stage[MSG_MAX + 1];
     char go[MSG_MAX + 1];
     char finish[MSG_MAX + 1];
@@ -100,20 +119,36 @@ public:
     virtual void flush() = 0; // end of a burst
 };
 
-// "0:14.630"
+// "0:14.630" (logs and the console)
 inline void formatTime(uint32_t ms, char *out, size_t len)
 {
     snprintf(out, len, "%lu:%02lu.%03lu", (unsigned long)(ms / 60000), (unsigned long)((ms / 1000) % 60),
              (unsigned long)(ms % 1000));
 }
 
-// Row 15 text: "L1:0:14.630" or "L1:0:14.630 | BEST"
-inline void lapText(uint8_t lap, uint32_t ms, bool best, char *out, size_t len)
+// CMRC's OSD times: hundredths, minutes only once there are any - "14.63", "1:02.31".
+inline void cmrcTime(uint32_t ms, char *out, size_t len)
 {
-    char t[16];
-    formatTime(ms, t, sizeof(t));
-    snprintf(out, len, best ? "L%u:%s | BEST" : "L%u:%s", lap, t);
+    unsigned long cs = ms / 10;
+    if (cs >= 6000) snprintf(out, len, "%lu:%02lu.%02lu", cs / 6000, cs / 100 % 60, cs % 100);
+    else snprintf(out, len, "%02lu.%02lu", cs / 100, cs % 100);
 }
+
+// Row 15: "x L2:17.62 | T35.24 w" - lap 2's time, and the total since the start pass.
+inline void lapResultText(uint8_t lap, uint32_t lapMs, uint32_t totalMs, char *out, size_t len)
+{
+    char l[16], t[16];
+    cmrcTime(lapMs, l, sizeof(l));
+    cmrcTime(totalMs, t, sizeof(t));
+    snprintf(out, len, "x L%u:%s | T%s w", lap, l, t);
+}
+
+// Row 3: "P1 | L3" (lap 3 is being flown).
+inline void lapLineText(uint8_t lap, char *out, size_t len) { snprintf(out, len, "P1 | L%u", lap); }
+
+// Status (row 5) and name (rows 0 and 2) decorations, as the timers send them.
+inline void statusText(const char *msg, char *out, size_t len) { snprintf(out, len, "w %s x", msg); }
+inline void nameText(const char *name, char *out, size_t len) { snprintf(out, len, "x %s w", name); }
 
 // HDZero's OSD font is upper case only.
 inline void upper(const char *in, char *out, size_t len)
@@ -143,6 +178,7 @@ public:
         setup_ = s;
         stage_ = s.mode == RACE ? STAGING : PRACTICE_RUN;
         holdMs_ = holdMs;
+        clearStatusAt_ = clearLapResultAt_ = 0;
         goScheduled_ = false;
         started_ = false;
         timeUp_ = false;
@@ -161,22 +197,24 @@ public:
 
         sink_.osdClear();
         sink_.frame(textFrame(lapframe::SLOT_OSD_CLEAR));
-        char buf[64];
+        char buf[64], text[72];
         if (s.msg.event && s.event[0])
         {
             upper(s.event, buf, sizeof(buf));
-            row(ROW_EVENT, buf);
+            nameText(buf, text, sizeof(text));
+            row(ROW_EVENT, text);
         }
         if (s.msg.heat)
         {
             char heat[PREFIX_MAX + 8];
             snprintf(heat, sizeof(heat), s.heatPrefix[0] ? "%s %u" : "%s%u", s.heatPrefix, s.heat);
             upper(heat, buf, sizeof(buf));
-            row(ROW_HEAT, buf);
+            nameText(buf, text, sizeof(text));
+            row(ROW_HEAT, text);
         }
         if (s.mode == RACE)
         {
-            if (s.msg.startFinish) row(ROW_STATUS, s.msg.stage);
+            if (s.msg.startFinish) status(s.msg.stage);
             raceFrame(0);
         }
         sink_.flush();
@@ -186,16 +224,23 @@ public:
     {
         if (!armed()) return;
         stage_ = IDLE;
+        clearStatusAt_ = clearLapResultAt_ = 0;
         lapframe::Frame f = base(lapframe::DISARMED);
         f.heat = setup_.heat;
         f.lapLimit = lapsDone_;
         f.ignored = ignored_;
         sink_.frame(f);
+        // Like a timer clearing the laps: wipes the goggles, and tells RacePanel the heat is over.
+        osdClear();
         sink_.flush();
     }
 
     void tick(uint32_t nowMs)
     {
+        bool cleared = expire(clearStatusAt_, ROW_STATUS, nowMs);
+        cleared = expire(clearLapResultAt_, ROW_LAP_RESULT, nowMs) || cleared;
+        if (cleared) sink_.flush();
+
         if (stage_ == STAGING)
         {
             if (!goScheduled_)
@@ -207,7 +252,12 @@ public:
             if ((int32_t)(nowMs - goMs_) < 0) return;
             stage_ = RACING;
             goMs_ = nowMs; // the clock starts when GO actually goes out
-            if (setup_.msg.startFinish) row(ROW_STATUS, setup_.msg.go);
+            if (setup_.msg.startFinish)
+            {
+                osdClear();
+                status(setup_.msg.go);
+                schedule(clearStatusAt_, nowMs + GO_UPTIME_MS);
+            }
             raceFrame(0);
             sink_.flush();
         }
@@ -256,6 +306,9 @@ private:
     Stage stage_ = IDLE;
     uint8_t seq_ = 0;
     uint32_t holdMs_ = 0;
+    uint32_t clearStatusAt_ = 0;     // 0 = nothing scheduled
+    uint32_t clearLapResultAt_ = 0;
+    uint32_t startPassMs_ = 0;       // practice first pass / race holeshot: lap totals count from here
     bool goScheduled_ = false;
     uint32_t goMs_ = 0;
     bool started_ = false;
@@ -289,10 +342,43 @@ private:
         for (size_t i = 0; i < n; i++) sink_.frame(frames[i]);
     }
 
+    // Writes (or with "" clears) one OSD row, and mirrors it to the app.
     void row(uint8_t r, const char *text)
     {
         sink_.osd(r, text);
         field(r, text);
+    }
+
+    void status(const char *msg)
+    {
+        char text[MSG_MAX + 8];
+        statusText(msg, text, sizeof(text));
+        row(ROW_STATUS, text);
+    }
+
+    void osdClear()
+    {
+        sink_.osdClear();
+        sink_.frame(textFrame(lapframe::SLOT_OSD_CLEAR));
+    }
+
+    static void schedule(uint32_t &at, uint32_t when) { at = when ? when : 1; }
+
+    // Clears row r once its deadline has passed. Returns whether it did.
+    bool expire(uint32_t &at, uint8_t r, uint32_t nowMs)
+    {
+        if (!at || (int32_t)(nowMs - at) < 0) return false;
+        at = 0;
+        row(r, "");
+        return true;
+    }
+
+    void lapLine(uint8_t lap)
+    {
+        if (!setup_.msg.laps) return;
+        char text[16];
+        lapLineText(lap, text, sizeof(text));
+        row(ROW_LAP, text);
     }
 
     void raceFrame(uint32_t raceMs)
@@ -324,11 +410,28 @@ private:
         lapFrame(lapsDone_, flags, ms);
         if (setup_.msg.laps)
         {
-            char text[32];
-            lapText(lapsDone_, ms, best && setup_.msg.best, text, sizeof(text));
-            row(ROW_LAP, text);
+            // The finishing lap's row 3 is cleared by finish() instead.
+            if (!final) lapLine((uint8_t)(lapsDone_ + 1));
+            char text[40];
+            lapResultText(lapsDone_, ms, passMs - startPassMs_, text, sizeof(text));
+            row(ROW_LAP_RESULT, text);
+            schedule(clearLapResultAt_, passMs + LAP_RESULT_UPTIME_MS);
         }
         return flags;
+    }
+
+    // Race over for this pilot: "FINISHED!", then place and total from GO on rows 6-7.
+    void finish(uint32_t passMs)
+    {
+        if (setup_.msg.laps) row(ROW_LAP, "");
+        if (!setup_.msg.startFinish) return;
+        status(setup_.msg.finish);
+        schedule(clearStatusAt_, passMs + FINISH_UPTIME_MS);
+        row(ROW_RESULTS, "P1");
+        char t[16], text[20];
+        cmrcTime(passMs - goMs_, t, sizeof(t));
+        snprintf(text, sizeof(text), "T%s", t);
+        row(ROW_RESULTS + 1, text);
     }
 
     void practicePass(uint32_t passMs)
@@ -336,8 +439,9 @@ private:
         if (!started_)
         {
             started_ = true;
-            lastPassMs_ = passMs;
+            lastPassMs_ = startPassMs_ = passMs;
             lapFrame(0, 0, 0);
+            lapLine(1);
         }
         else
             completeLap(passMs, false);
@@ -350,8 +454,9 @@ private:
         if (!started_)
         {
             started_ = true;
-            lastPassMs_ = passMs;
+            lastPassMs_ = startPassMs_ = passMs;
             lapFrame(0, 0, passMs - goMs_); // holeshot
+            lapLine(1);
             sink_.flush();
             return;
         }
@@ -361,7 +466,7 @@ private:
         if (final)
         {
             stage_ = FINISHED;
-            if (setup_.msg.startFinish) row(ROW_STATUS, setup_.msg.finish);
+            finish(passMs);
             raceFrame(passMs - goMs_);
         }
         sink_.flush();

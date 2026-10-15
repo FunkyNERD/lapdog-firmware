@@ -44,6 +44,7 @@ constexpr uint32_t SAMPLE_PERIOD_MS = 5;     // ~200 Hz band-power rate
 // --- Outputs -----------------------------------------------------------------
 constexpr uint32_t HEARTBEAT_MS = 5000;      // while armed
 constexpr uint8_t ESPNOW_CHANNEL = 1;        // 2.4 GHz only - never 5 GHz (overlaps the video band)
+constexpr uint32_t ESPNOW_FRAME_GAP_MS = 8;  // between OSD frames, as elrs-race-test sends them
 constexpr uint32_t BLE_BURST_MS = 400;        // per burst, shared by its frames
 constexpr uint32_t BLE_FRAME_MIN_MS = 60;     // but each frame gets at least this (~3 adverts)
 constexpr uint32_t BLE_ADV_INTERVAL_MS = 20;

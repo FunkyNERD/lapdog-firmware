@@ -74,7 +74,23 @@ static void espnowSend(const uint8_t *frame, size_t n)
 {
     if (!n) return;
     if (esp_now_send(activeUid, frame, n) != ESP_OK) ESP_LOGW(TAG, "esp-now send failed");
-    vTaskDelay(pdMS_TO_TICKS(2)); // let the Wi-Fi task drain; it queues only a few frames
+    // Spaced like elrs-race-test: the backpack drops frames that arrive too close together.
+    vTaskDelay(pdMS_TO_TICKS(cfg::ESPNOW_FRAME_GAP_MS));
+}
+
+// Clears one OSD row the way the timers do: a write of OSD_COLS NULs from column 0.
+// (An empty write leaves the old text on HDZero.)
+static size_t osdClearRow(uint8_t *out, size_t outLen, uint8_t row)
+{
+    uint8_t p[vrxc::OSD_TEXT_HEADER + vrxc::OSD_COLS] = {vrxc::OSD_TEXT, row, 0, 0};
+    return vrxc::mspEncode(out, outLen, vrxc::MSP_ELRS_SET_OSD, p, sizeof(p));
+}
+
+// Text centred on the 50-column row, as the timers place it.
+static size_t osdTextCentred(uint8_t *out, size_t outLen, uint8_t row, const char *text)
+{
+    int col = vrxc::OSD_COLS / 2 - (int)strlen(text) / 2;
+    return vrxc::osdText(out, outLen, row, (uint8_t)(col < 0 ? 0 : col), text);
 }
 
 // --- BLE (NimBLE, non-connectable advert bursts) --------------------------------
@@ -244,8 +260,8 @@ private:
         if (clear_) espnowSend(f, vrxc::osdClear(f, sizeof(f)));
         for (size_t i = 0; i < rows_; i++)
         {
-            espnowSend(f, vrxc::osdText(f, sizeof(f), rowNo_[i], 0, "")); // blank clears the old text
-            if (rowText_[i][0]) espnowSend(f, vrxc::osdText(f, sizeof(f), rowNo_[i], 0, rowText_[i]));
+            espnowSend(f, osdClearRow(f, sizeof(f), rowNo_[i])); // "" is just this: the row cleared
+            if (rowText_[i][0]) espnowSend(f, osdTextCentred(f, sizeof(f), rowNo_[i], rowText_[i]));
         }
         espnowSend(f, vrxc::osdDisplay(f, sizeof(f)));
     }
