@@ -6,10 +6,15 @@
 static led::Pattern pattern = led::IDLE;
 static uint32_t flashUntilMs = 0;
 
-static void write(bool on) { gpio_set_level(cfg::PIN_LED, on != cfg::LED_ACTIVE_LOW); }
+static void write(bool on)
+{
+    if (cfg::PIN_LED == GPIO_NUM_NC) return;
+    gpio_set_level(cfg::PIN_LED, on != cfg::LED_ACTIVE_LOW);
+}
 
 void led::begin()
 {
+    if (cfg::PIN_LED == GPIO_NUM_NC) return; // no plain LED on this board
     gpio_reset_pin(cfg::PIN_LED);
     gpio_set_direction(cfg::PIN_LED, GPIO_MODE_OUTPUT);
     write(false);

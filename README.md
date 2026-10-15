@@ -25,6 +25,24 @@ pio run -e c3_test -t upload
 pio device monitor -e c3_test
 ```
 
+### Testing on the 01Space ESP32-C3 0.42" OLED board
+
+`env:c3_oled` is the same test build for the 01Space board elrs-race-test runs on, with a status screen on its 72x40 OLED (SSD1306 on I2C, SDA GPIO5, SCL GPIO6). The screen follows the same frames the app gets:
+
+| State | Screen |
+| --- | --- |
+| Idle | channel, `IDLE`, frequency (or the last heat's best lap), radio outputs |
+| Armed, before the first pass | heat and mode, `ARMED` (practice) or `READY` / `GO!` (race) |
+| Flying | `L3` (or `L3/5` in a race), the running lap time, the last lap (`*` = best) |
+| Race finished | `DONE`, best lap, race total |
+
+The screen flashes inverted on every lap. BOOT is GPIO9. The board's LED is a WS2812, which this build doesn't drive. Build with `-DLAPDOG_OLED=0` in place of `-DLAPDOG_OLED=1` to leave the OLED dark.
+
+```bash
+pio run -e c3_oled -t upload
+pio device monitor -e c3_oled
+```
+
 ### Flash layout
 
 Both boards have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 1 MB app slot, so `partitions.csv` gives a single ~2 MB app slot (no OTA yet).

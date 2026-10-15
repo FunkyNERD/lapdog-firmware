@@ -11,6 +11,7 @@
 #include "config.h"
 #include "console.h"
 #include "detector.h"
+#include "display.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -46,7 +47,22 @@ static volatile bool rssiStream = false;
 static volatile race::Stage currentStage = race::IDLE;
 static volatile uint16_t currentHeat = 0;
 
-static race::Session session(outputs::sink());
+// The session's messages go to the radios and USB, and to the OLED if there is one.
+class TeeSink : public race::Sink
+{
+public:
+    void frame(const lapframe::Frame &f) override
+    {
+        display::frame(f);
+        outputs::sink().frame(f);
+    }
+    void osd(uint8_t row, const char *text) override { outputs::sink().osd(row, text); }
+    void osdClear() override { outputs::sink().osdClear(); }
+    void flush() override { outputs::sink().flush(); }
+};
+
+static TeeSink tee;
+static race::Session session(tee);
 static app::ArmRequest lastArm = {};
 
 bool app::armed() { return currentStage != race::IDLE; }
@@ -146,6 +162,7 @@ extern "C" void app_main()
     cmds = xQueueCreate(4, sizeof(Cmd));
     settings::begin();
     led::begin();
+    display::begin();
     button::begin();
     console::begin();
 
