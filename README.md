@@ -69,6 +69,7 @@ The workflow pulls `vrxc-msp` (public) over HTTPS rather than the `ssh://` URL i
 - **Long press BOOT (1 s)** toggles idle and timer (arms `set mode practice|race`). **Short press** while armed starts the next heat.
 - LED: slow blink = idle, solid = armed, flicker = lap.
 - Boots idle (`cfg::BOOT_ARMED`).
+- Heartbeats every 5 s while armed. After a disarm it sends idle heartbeats every 2 s for 16 s: DISARMED goes out in one short BLE burst, and an idle timer is otherwise silent, so an app that missed it would keep timing the heat.
 
 ### Sessions
 

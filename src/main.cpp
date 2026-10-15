@@ -46,6 +46,7 @@ static volatile bool simRequested = false;
 static volatile bool rssiStream = false;
 static volatile race::Stage currentStage = race::IDLE;
 static volatile uint16_t currentHeat = 0;
+static uint32_t idleBeatsUntil = 0; // millis(): idle heartbeats until then, after a disarm (0 = none)
 
 // The session's messages go to the radios and USB, and to the OLED if there is one.
 class TeeSink : public race::Sink
@@ -87,6 +88,8 @@ static void disarm()
 {
     session.disarm(millis());
     sdr::end();
+    idleBeatsUntil = millis() + cfg::IDLE_HEARTBEATS_FOR_MS;
+    if (!idleBeatsUntil) idleBeatsUntil = 1;
     currentStage = race::IDLE;
     led::set(led::IDLE);
     ESP_LOGI(TAG, "idle");
@@ -112,6 +115,7 @@ static void arm(const app::ArmRequest &r, uint16_t heat, Detector &det)
     det = Detector(timer_settings::detectorParams(s));
     // TODO: measure the in-room baseline over a second or so instead.
     det.setBaseline(-90.0f);
+    idleBeatsUntil = 0;
     sdr::begin(s.freqMhz);
     session.arm(setup, timer_settings::holdMs(s, esp_random()));
     currentHeat = heat;
@@ -257,6 +261,15 @@ extern "C" void app_main()
                 session.heartbeat(now);
             }
             currentStage = session.stage();
+        }
+        else if (idleBeatsUntil)
+        {
+            if ((int32_t)(idleBeatsUntil - now) <= 0) idleBeatsUntil = 0;
+            else if (now - lastHeartbeat >= cfg::IDLE_HEARTBEAT_MS)
+            {
+                lastHeartbeat = now;
+                session.heartbeat(now); // stage IDLE: the phone ends the heat if it missed DISARMED
+            }
         }
 
         led::update(now);

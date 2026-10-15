@@ -61,6 +61,11 @@ constexpr uint32_t SAMPLE_PERIOD_MS = 5;     // ~200 Hz band-power rate
 
 // --- Outputs -----------------------------------------------------------------
 constexpr uint32_t HEARTBEAT_MS = 5000;      // while armed
+// After a disarm, keep saying "idle" for a while. The DISARMED burst is one short
+// burst, and an idle timer is otherwise silent, so a phone that missed it would keep
+// timing the heat forever; any one of these ends it there.
+constexpr uint32_t IDLE_HEARTBEAT_MS = 2000;
+constexpr uint32_t IDLE_HEARTBEATS_FOR_MS = 16000;
 constexpr uint8_t ESPNOW_CHANNEL = 1;        // 2.4 GHz only - never 5 GHz (overlaps the video band)
 constexpr uint32_t ESPNOW_FRAME_GAP_MS = 8;  // between OSD frames, as elrs-race-test sends them
 constexpr uint32_t BLE_BURST_MS = 400;        // per burst, shared by its frames
