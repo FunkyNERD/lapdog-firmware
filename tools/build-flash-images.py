@@ -79,7 +79,13 @@ def build(device, version):
             "--flash_mode", "keep", "--flash_freq", "keep", "--flash_size", "keep"]
     for offset, path in sorted(parts):
         args += [hex(offset), path]
-    run(PIO, "pkg", "exec", "--package", "tool-esptoolpy", "--", "esptool.py", *args)
+    # A pip-installed esptool if there is one (CI); PlatformIO's copy needs PlatformIO's own
+    # Python environment for its dependencies.
+    esptool = shutil.which("esptool")
+    if esptool:
+        run(esptool, *args)
+    else:
+        run(PIO, "pkg", "exec", "--package", "tool-esptoolpy", "--", "esptool.py", *args)
 
     write_sha(app)
     return {
