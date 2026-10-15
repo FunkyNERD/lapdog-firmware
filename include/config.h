@@ -6,17 +6,27 @@
 #include <stdint.h>
 
 #include "driver/gpio.h"
+#include "sdkconfig.h"
 
 namespace cfg
 {
 
-// --- Pins (mini ESP32-C5 dev board) -------------------------------------------
-// BOOT is a strapping pin: fine to read once running, just don't hold it at
-// power-on.
+// --- Pins ----------------------------------------------------------------------
+// BOOT is a strapping pin on both chips: fine to read once running, just don't
+// hold it at power-on.
+#if CONFIG_IDF_TARGET_ESP32C3
+// ESP32-C3 SuperMini - test build only (env:c3_test). No SDR: laps come from
+// `sim`. For testing ESP-NOW, BLE, the USB console and the app.
+constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_9;
+constexpr gpio_num_t PIN_LED = GPIO_NUM_8; // blue onboard LED, lit when low
+constexpr bool LED_ACTIVE_LOW = true;
+#else
+// Mini ESP32-C5 dev board - the real timer.
 constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_28;
 // TODO: confirm against the mini board's schematic once it arrives.
 constexpr gpio_num_t PIN_LED = GPIO_NUM_27;
 constexpr bool LED_ACTIVE_LOW = false;
+#endif
 
 // --- Button ------------------------------------------------------------------
 constexpr uint32_t LONG_PRESS_MS = 1000; // toggles idle <-> timer
