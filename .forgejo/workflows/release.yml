@@ -15,8 +15,7 @@
 # prereleases, which it ignores.
 #
 # platformio.ini pulls vrxc-msp over ssh://, which the runner has no key for, so the build
-# rewrites that to HTTPS. vrxc-msp is public, so the workflow's own token is enough;
-# VRXC_READ_TOKEN (read:repository) is only needed if it's ever made private again.
+# rewrites that to HTTPS. vrxc-msp is public, so no token is needed.
 name: Release firmware
 
 on:
@@ -33,9 +32,10 @@ jobs:
     steps:
       - name: Install tools
         # nodejs: the checkout/cache steps are JavaScript actions, run inside this container.
+        # build-essential: gcc/g++ for the native tests.
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update -qq && apt-get install -y -qq git curl jq nodejs >/dev/null
+          apt-get update -qq && apt-get install -y -qq git curl jq nodejs build-essential >/dev/null
           pip install --quiet platformio
 
       - name: Checkout code
@@ -50,10 +50,9 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
 
       - name: Fetch vrxc-msp over HTTPS
-        env:
-          READ_TOKEN: ${{ secrets.VRXC_READ_TOKEN || secrets.GITHUB_TOKEN }}
+        # GITHUB_SERVER_URL is the in-cluster address, so name the public host explicitly.
         run: |
-          git config --global url."https://oauth2:${READ_TOKEN}@${GITHUB_SERVER_URL#https://}/".insteadOf "ssh://git@${GITHUB_SERVER_URL#https://}/"
+          git config --global url."https://git.hazaar.io/".insteadOf "ssh://git@git.hazaar.io/"
 
       - name: Work out the version
         run: |
