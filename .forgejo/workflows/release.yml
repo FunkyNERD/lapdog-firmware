@@ -36,8 +36,13 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq && apt-get install -y -qq git curl jq nodejs build-essential >/dev/null
-          # esptool: merges the factory images (PlatformIO's copy lacks its Python deps here).
-          pip install --quiet platformio 'esptool>=5,<6'
+          pip install --quiet platformio
+          # esptool merges the factory images (PlatformIO's copy lacks its Python deps here). It
+          # gets its own venv so its dependencies can't clash with PlatformIO's.
+          python3 -m venv /opt/esptool
+          /opt/esptool/bin/pip install --quiet 'esptool>=5,<6'
+          /opt/esptool/bin/esptool version
+          echo /opt/esptool/bin >> "$GITHUB_PATH"
 
       - name: Checkout code
         uses: actions/checkout@v5
