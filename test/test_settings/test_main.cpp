@@ -22,7 +22,8 @@ void test_defaults()
 {
     Settings s = ts::defaults(5800, DET);
     TEST_ASSERT_EQUAL_STRING("F4", s.chan);
-    TEST_ASSERT_EQUAL_STRING("ble", value(s, "link").c_str());
+    TEST_ASSERT_EQUAL_STRING("on", value(s, "ble").c_str());
+    TEST_ASSERT_EQUAL_STRING("off", value(s, "espnow").c_str());
     TEST_ASSERT_EQUAL_STRING("Heat", s.heatPrefix);
     TEST_ASSERT_EQUAL_STRING("ARM NOW", s.msg.stage);
     TEST_ASSERT_EQUAL(3, s.raceLaps);
@@ -65,9 +66,14 @@ void test_text_and_toggles()
     TEST_ASSERT_TRUE(ts::set(s, "msg.best", "off"));
     TEST_ASSERT_FALSE(s.msg.best);
     TEST_ASSERT_FALSE(ts::set(s, "msg.best", "maybe"));
-    TEST_ASSERT_TRUE(ts::set(s, "link", "espnow"));
-    TEST_ASSERT_EQUAL(LINK_ESPNOW, s.link);
-    TEST_ASSERT_FALSE(ts::set(s, "link", "both"));
+    TEST_ASSERT_TRUE(ts::set(s, "espnow", "on"));
+    TEST_ASSERT_EQUAL(LINK_BLE | LINK_ESPNOW, s.links);
+    TEST_ASSERT_TRUE(ts::set(s, "ble", "off"));
+    TEST_ASSERT_EQUAL(LINK_ESPNOW, s.links);
+    TEST_ASSERT_EQUAL_STRING("off", value(s, "ble").c_str());
+    TEST_ASSERT_EQUAL_STRING("on", value(s, "espnow").c_str());
+    TEST_ASSERT_FALSE(ts::set(s, "espnow", "both"));
+    TEST_ASSERT_FALSE(ts::set(s, "link", "ble")); // replaced by the ble/espnow toggles
     TEST_ASSERT_FALSE(ts::set(s, "nope", "1"));
 }
 

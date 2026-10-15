@@ -80,10 +80,10 @@ static void disarm()
 static void arm(const app::ArmRequest &r, uint16_t heat, Detector &det)
 {
     Settings &s = settings::get();
-    // Link and bind phrase may have changed while idle.
+    // Links and bind phrase may have changed while idle.
     uint8_t uid[6];
     vrxc::uidFromBindPhrase(s.bindPhrase, uid);
-    outputs::setLink((Link)s.link, uid);
+    outputs::setLinks(s.links, uid);
 
     race::Setup setup = timer_settings::sessionSetup(s, r.mode, heat);
     if (r.overrideLimit)
@@ -151,7 +151,7 @@ extern "C" void app_main()
 
     uint8_t uid[6];
     vrxc::uidFromBindPhrase(settings::get().bindPhrase, uid);
-    outputs::setLink((Link)settings::get().link, uid);
+    outputs::setLinks(settings::get().links, uid);
     ESP_LOGI(TAG, "UID %02x:%02x:%02x:%02x:%02x:%02x", uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
 
     Detector det(timer_settings::detectorParams(settings::get()));

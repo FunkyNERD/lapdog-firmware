@@ -65,11 +65,13 @@ Both boards have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 
 - **Ignore parked quads** (`set park on|off`, `set maxpeak <ms>`, default on / 1.5 s): a peak longer than this is a quad sitting at the gate; without it, picking the quad up would count a lap.
 - Applies in practice and race. Rejected passes don't move the lap reference, and each one is reported as an `IGNORED` frame (reason + count this heat); `DISARMED` carries the heat's total.
 
-### Radio output (exclusive)
+### Radio output
 
-One RF chain, so `set link ble|espnow` picks **one**: BLE adverts to the LapDog app, or ESP-NOW OSD to goggles and RacePanel. USB always carries everything. The link is brought up when the timer arms, so a change needs no reboot.
+`set ble on|off` (BLE adverts to the LapDog app) and `set espnow on|off` (ESP-NOW OSD to goggles and RacePanel) are independent: either, both or neither. USB always carries everything. Links are brought up when the timer arms, so a change needs no reboot.
 
-Race messages go to whichever link is selected. On ESP-NOW they're ELRS Backpack OSD rows in CMRC live timing's format, the same rows and wording elrs-race-test sends and RacePanel decodes (the row tells RacePanel what a message is):
+With both on, IDF's Wi-Fi/BT coexistence shares the 2.4 GHz radio and each burst sends ESP-NOW first (the goggles are what the pilot is watching), then BLE - so the app hears a lap ~0.5 s after the goggles. Lap times are timed on the timer, so that delay doesn't change them.
+
+Race messages go to every link that's on. On ESP-NOW they're ELRS Backpack OSD rows in CMRC live timing's format, the same rows and wording elrs-race-test sends and RacePanel decodes (the row tells RacePanel what a message is):
 
 | Row | Message | Example |
 | --- | --- | --- |
@@ -89,7 +91,8 @@ Plain text lines. Frames are `F:<hex>` (up to 24 bytes, see `lap_frame.h`), `get
 ```
 set chan R4
 set event Thursday Backyard
-set link ble
+set ble on
+set espnow on
 save
 arm race laps 3
 sim
@@ -102,5 +105,6 @@ F:212A03020139300000
 - [ ] Integrate ESP-SDR capture + fixed gain (`sdr.cpp`)
 - [ ] Measure SDR ↔ BLE/ESP-NOW switch time
 - [ ] Check the NimBLE advert burst with nRF Connect (20 ms interval; falls back to 100 ms if the controller refuses)
-- [ ] Measure how long BLE / Wi-Fi init takes when the timer arms with a changed link
+- [ ] Measure how long BLE / Wi-Fi init takes when the timer arms with changed links
+- [ ] Check SDR capture still works with both BLE and Wi-Fi stacks up (C5)
 - [ ] Measure baseline on arm instead of a fixed -90 dB

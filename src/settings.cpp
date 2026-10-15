@@ -9,7 +9,7 @@
 
 static const char *TAG = "settings";
 static const char *NVS_NS = "lapdog";
-static const uint32_t SETTINGS_VERSION = 3; // bump when the struct layout changes
+static const uint32_t SETTINGS_VERSION = 4; // bump when the struct layout changes
 
 static Settings current;
 static uint16_t heat = 1;
@@ -36,9 +36,13 @@ void settings::begin()
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
     uint32_t version = 0;
     size_t len = sizeof(current);
-    if (nvs_get_u32(h, "ver", &version) == ESP_OK && version == SETTINGS_VERSION &&
+    if (nvs_get_u32(h, "ver", &version) == ESP_OK && (version == SETTINGS_VERSION || version == 3) &&
         nvs_get_blob(h, "cfg", &current, &len) == ESP_OK && len == sizeof(current))
+    {
+        // v3 had one link (0 BLE, 1 ESP-NOW) in the byte that's now the links bitmask.
+        if (version == 3) current.links = current.links == 1 ? LINK_ESPNOW : LINK_BLE;
         ESP_LOGI(TAG, "loaded");
+    }
     else
         resetDefaults();
     if (nvs_get_u16(h, "heat", &heat) != ESP_OK || heat == 0) heat = 1;

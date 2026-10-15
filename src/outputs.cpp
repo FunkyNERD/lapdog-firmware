@@ -23,13 +23,10 @@
 
 static const char *TAG = "out";
 
-enum Active
-{
-    NONE,
-    BLE,
-    ESPNOW,
-};
-static Active active = NONE;
+// Which stacks are up. Both can run at once: IDF's Wi-Fi/BT coexistence shares the
+// 2.4 GHz radio, and a burst sends them one after the other anyway.
+static bool bleOn = false;
+static bool espnowOn = false;
 static uint8_t activeUid[6];
 
 // --- ESP-NOW -------------------------------------------------------------------
@@ -178,18 +175,29 @@ static void bleAdvertise(const uint8_t *frame, size_t n, uint32_t ms)
 
 // --- Link selection -------------------------------------------------------------
 
-void outputs::setLink(Link link, const uint8_t uid[6])
+void outputs::setLinks(uint8_t links, const uint8_t uid[6])
 {
-    Active want = link == LINK_ESPNOW ? ESPNOW : BLE;
-    if (want == active && (want == BLE || !memcmp(uid, activeUid, 6))) return;
-    if (active == ESPNOW) espnowStop();
-    if (active == BLE) bleStop();
-    active = NONE;
-    memcpy(activeUid, uid, 6);
-    if (want == ESPNOW) espnowStart(uid);
-    else if (!bleStart()) return;
-    active = want;
-    ESP_LOGI(TAG, "radio output: %s", want == ESPNOW ? "ESP-NOW" : "BLE");
+    bool wantBle = links & LINK_BLE;
+    bool wantEspnow = links & LINK_ESPNOW;
+    // A new bind phrase means a new MAC: restart ESP-NOW with it.
+    if (espnowOn && (!wantEspnow || memcmp(uid, activeUid, 6)))
+    {
+        espnowStop();
+        espnowOn = false;
+    }
+    if (bleOn && !wantBle)
+    {
+        bleStop();
+        bleOn = false;
+    }
+    if (wantBle && !bleOn) bleOn = bleStart();
+    if (wantEspnow && !espnowOn)
+    {
+        memcpy(activeUid, uid, 6);
+        espnowStart(uid);
+        espnowOn = true;
+    }
+    ESP_LOGI(TAG, "radio output: BLE %s, ESP-NOW %s", bleOn ? "on" : "off", espnowOn ? "on" : "off");
 }
 
 // --- Sink -----------------------------------------------------------------------
@@ -207,7 +215,7 @@ public:
         printf("F:");
         for (size_t i = 0; i < n; i++) printf("%02X", b[i]);
         printf("\n");
-        if (active == BLE && frames_ < MAX_FRAMES)
+        if (bleOn && frames_ < MAX_FRAMES)
         {
             memcpy(ble_[frames_], b, n);
             bleLen_[frames_++] = (uint8_t)n;
@@ -216,20 +224,21 @@ public:
 
     void osd(uint8_t row, const char *text) override
     {
-        if (active != ESPNOW || rows_ >= MAX_ROWS) return;
+        if (!espnowOn || rows_ >= MAX_ROWS) return;
         rowNo_[rows_] = row;
         snprintf(rowText_[rows_++], sizeof(rowText_[0]), "%s", text);
     }
 
-    void osdClear() override { clear_ = active == ESPNOW; }
+    void osdClear() override { clear_ = espnowOn; }
 
     void flush() override
     {
         if (!frames_ && !rows_ && !clear_) return;
         bool resume = sdr::running();
         if (resume) sdr::end();
-        if (active == BLE) sendBle();
-        if (active == ESPNOW) sendEspnow();
+        // ESP-NOW first: the goggles are what the pilot is looking at.
+        if (rows_ || clear_) sendEspnow();
+        if (frames_) sendBle();
         frames_ = rows_ = 0;
         clear_ = false;
         if (resume) sdr::begin(settings::get().freqMhz); // re-apply the PHY debug config

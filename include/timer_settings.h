@@ -16,10 +16,11 @@
 #include "detector.h"
 #include "race.h"
 
+// Radio outputs, as bits of Settings::links. USB is always on.
 enum Link : uint8_t
 {
-    LINK_BLE = 0,    // BLE advert bursts to the LapDog app
-    LINK_ESPNOW = 1, // VRxC_ELRS OSD to goggles / RacePanel
+    LINK_BLE = 1 << 0,    // BLE advert bursts to the LapDog app
+    LINK_ESPNOW = 1 << 1, // VRxC_ELRS OSD to goggles / RacePanel
 };
 
 struct Settings
@@ -29,7 +30,7 @@ struct Settings
     uint8_t pilot;
     DetectorParams detector;
     char bindPhrase[64]; // ELRS bind phrase -> ESP-NOW UID
-    uint8_t link;        // Link. One RF chain: BLE *or* ESP-NOW, never both. USB always.
+    uint8_t links;       // Link bits: either, both or neither. USB always.
     char event[race::EVENT_MAX + 1];
     char heatPrefix[race::PREFIX_MAX + 1];
     race::Messages msg;
@@ -48,7 +49,7 @@ namespace timer_settings
 constexpr const char *KEYS[] = {
     "chan",      "freq",      "pilot",     "enter",      "exit",       "alpha",      "minlap",
     "park",      "maxpeak",
-    "link",      "phrase",    "event",     "prefix",     "msg.event",  "msg.heat",   "msg.start",
+    "ble",       "espnow",    "phrase",    "event",     "prefix",     "msg.event",  "msg.heat",   "msg.start",
     "msg.laps",  "msg.best",  "text.stage", "text.go",   "text.finish", "mode",      "race.limit",
     "race.laps", "race.time", "race.hold",
 };
@@ -61,7 +62,7 @@ inline Settings defaults(uint16_t freqMhz, const DetectorParams &det)
     s.freqMhz = freqMhz;
     channels::labelOf(freqMhz, s.chan);
     s.detector = det;
-    s.link = LINK_BLE;
+    s.links = LINK_BLE;
     snprintf(s.heatPrefix, sizeof(s.heatPrefix), "Heat");
     s.msg = race::defaultMessages();
     s.mode = race::PRACTICE;
@@ -156,11 +157,11 @@ inline bool set(Settings &s, const char *key, const char *v)
         if (!parseLong(v, 300, 10000, n)) return false;
         s.detector.maxPeakMs = (uint32_t)n;
     }
-    else if (!strcmp(key, "link"))
+    else if (!strcmp(key, "ble") || !strcmp(key, "espnow"))
     {
-        if (!strcmp(v, "ble")) s.link = LINK_BLE;
-        else if (!strcmp(v, "espnow")) s.link = LINK_ESPNOW;
-        else return false;
+        if (!parseBool(v, b)) return false;
+        uint8_t bit = !strcmp(key, "ble") ? LINK_BLE : LINK_ESPNOW;
+        s.links = b ? s.links | bit : s.links & ~bit;
     }
     else if (!strcmp(key, "phrase")) return copyText(v, s.bindPhrase, sizeof(s.bindPhrase));
     else if (!strcmp(key, "event")) return copyText(v, s.event, sizeof(s.event));
@@ -221,7 +222,8 @@ inline bool get(const Settings &s, const char *key, char *out, size_t len)
     else if (!strcmp(key, "minlap")) snprintf(out, len, "%lu", (unsigned long)s.detector.minLapMs);
     else if (!strcmp(key, "maxpeak")) snprintf(out, len, "%lu", (unsigned long)s.detector.maxPeakMs);
     else if (!strcmp(key, "park")) snprintf(out, len, "%s", onOff[s.ignoreParked]);
-    else if (!strcmp(key, "link")) snprintf(out, len, "%s", s.link == LINK_ESPNOW ? "espnow" : "ble");
+    else if (!strcmp(key, "ble")) snprintf(out, len, "%s", onOff[(s.links & LINK_BLE) != 0]);
+    else if (!strcmp(key, "espnow")) snprintf(out, len, "%s", onOff[(s.links & LINK_ESPNOW) != 0]);
     else if (!strcmp(key, "phrase")) snprintf(out, len, "%s", s.bindPhrase);
     else if (!strcmp(key, "event")) snprintf(out, len, "%s", s.event);
     else if (!strcmp(key, "prefix")) snprintf(out, len, "%s", s.heatPrefix);
