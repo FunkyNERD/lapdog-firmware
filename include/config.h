@@ -68,8 +68,20 @@ constexpr uint32_t IDLE_HEARTBEAT_MS = 2000;
 constexpr uint32_t IDLE_HEARTBEATS_FOR_MS = 16000;
 constexpr uint8_t ESPNOW_CHANNEL = 1;        // 2.4 GHz only - never 5 GHz (overlaps the video band)
 constexpr uint32_t ESPNOW_FRAME_GAP_MS = 8;  // between OSD frames, as elrs-race-test sends them
-constexpr uint32_t BLE_BURST_MS = 400;        // per burst, shared by its frames
-constexpr uint32_t BLE_FRAME_MIN_MS = 60;     // but each frame gets at least this (~3 adverts)
+// A burst's frames go out one after another. The ones the app acts on (LAP, ARMED,
+// DISARMED, RACE, IGNORED, HEARTBEAT) get most of the airtime; the OSD text (TEXT)
+// gets a short slot each. At a 20 ms interval that's ~7 adverts of each key frame and
+// ~2 of each text frame.
+//
+// Then the key frames (bar heartbeats) go out again as short echoes at each of
+// BLE_ECHO_AFTER_MS. Phones only listen part of the time (a Xiaomi on Wi-Fi heard
+// 20-30% of adverts, whatever the scan filter), in gaps that a repeat inside the same
+// burst falls into; spread over ~2.5 s, one of four windows nearly always lands. The
+// last echo stays inside the 3 s minimum lap, so it never overlaps the next pass.
+constexpr uint32_t BLE_KEY_FRAME_MS = 140;
+constexpr uint32_t BLE_TEXT_FRAME_MS = 40;
+constexpr uint32_t BLE_ECHO_AFTER_MS[] = {700, 1500, 2400};
+constexpr uint32_t BLE_ECHO_FRAME_MS = 100;
 constexpr uint32_t BLE_ADV_INTERVAL_MS = 20;
 
 // Power-on mode: idle is safer while developing. BOOT arms Settings::mode.

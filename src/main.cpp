@@ -272,6 +272,7 @@ extern "C" void app_main()
             }
         }
 
+        outputs::tick(now);
         led::update(now);
         vTaskDelay(pdMS_TO_TICKS(cfg::SAMPLE_PERIOD_MS));
     }

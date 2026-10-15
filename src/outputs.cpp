@@ -1,5 +1,7 @@
 #include "outputs.h"
 
+#include "esp_timer.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -255,13 +257,60 @@ private:
     size_t rows_ = 0;
     bool clear_ = false;
 
+    static bool keyFrame(const uint8_t *frame) { return (frame[0] & 0x0F) != lapframe::TEXT; }
+
     void sendBle()
     {
-        // Each frame gets a share of the burst, but at least a few adverts.
-        uint32_t ms = cfg::BLE_BURST_MS / (frames_ ? frames_ : 1);
-        if (ms < cfg::BLE_FRAME_MIN_MS) ms = cfg::BLE_FRAME_MIN_MS;
-        for (size_t i = 0; i < frames_; i++) bleAdvertise(ble_[i], bleLen_[i], ms);
+        // Key frames long, text short (see cfg::BLE_KEY_FRAME_MS). Key frames bar
+        // heartbeats join the echo list, and the echo schedule starts again from now.
+        bool added = false;
+        for (size_t i = 0; i < frames_; i++)
+        {
+            bool key = keyFrame(ble_[i]);
+            bleAdvertise(ble_[i], bleLen_[i], key ? cfg::BLE_KEY_FRAME_MS : cfg::BLE_TEXT_FRAME_MS);
+            if (!key || (ble_[i][0] & 0x0F) == lapframe::HEARTBEAT) continue;
+            if (echoFrames_ == MAX_ECHO) // full: the oldest goes
+            {
+                memmove(echo_[0], echo_[1], sizeof(echo_[0]) * (MAX_ECHO - 1));
+                memmove(echoLen_, echoLen_ + 1, MAX_ECHO - 1);
+                echoFrames_--;
+            }
+            memcpy(echo_[echoFrames_], ble_[i], bleLen_[i]);
+            echoLen_[echoFrames_++] = bleLen_[i];
+            added = true;
+        }
+        if (added)
+        {
+            echoFrom_ = (uint32_t)(esp_timer_get_time() / 1000);
+            echoNext_ = 0;
+        }
     }
+
+public:
+    // Echoes the key frames at each of cfg::BLE_ECHO_AFTER_MS, then forgets them.
+    void tick(uint32_t nowMs)
+    {
+        if (!echoFrames_ || echoNext_ >= ECHOES) return;
+        if (nowMs - echoFrom_ < cfg::BLE_ECHO_AFTER_MS[echoNext_]) return;
+        echoNext_++;
+        if (bleOn)
+        {
+            bool resume = sdr::running();
+            if (resume) sdr::end();
+            for (size_t i = 0; i < echoFrames_; i++) bleAdvertise(echo_[i], echoLen_[i], cfg::BLE_ECHO_FRAME_MS);
+            if (resume) sdr::begin(settings::get().freqMhz);
+        }
+        if (echoNext_ >= ECHOES) echoFrames_ = 0;
+    }
+
+private:
+    static constexpr size_t MAX_ECHO = 6;
+    static constexpr size_t ECHOES = sizeof(cfg::BLE_ECHO_AFTER_MS) / sizeof(cfg::BLE_ECHO_AFTER_MS[0]);
+    uint8_t echo_[MAX_ECHO][lapframe::MAX_SIZE];
+    uint8_t echoLen_[MAX_ECHO];
+    size_t echoFrames_ = 0;
+    uint32_t echoFrom_ = 0; // ms: the burst the schedule counts from
+    size_t echoNext_ = ECHOES;
 
     void sendEspnow()
     {
@@ -281,3 +330,5 @@ DeviceSink deviceSink;
 } // namespace
 
 race::Sink &outputs::sink() { return deviceSink; }
+
+void outputs::tick(uint32_t nowMs) { deviceSink.tick(nowMs); }

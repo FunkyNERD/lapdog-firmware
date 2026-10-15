@@ -24,4 +24,8 @@ void setLinks(uint8_t links, const uint8_t uid[6]);
 // The session's sink: frames to USB immediately, radio on flush().
 race::Sink &sink();
 
+// Sends the BLE echo of the last burst's key frames when it's due (see
+// cfg::BLE_ECHO_AFTER_MS). Call every loop.
+void tick(uint32_t nowMs);
+
 } // namespace outputs

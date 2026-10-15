@@ -87,6 +87,8 @@ The workflow pulls `vrxc-msp` (public) over HTTPS rather than the `ssh://` URL i
 
 `set ble on|off` (BLE adverts to the LapDog app) and `set espnow on|off` (ESP-NOW OSD to goggles and LapDog LCD) are independent: either, both or neither. USB always carries everything. Links are brought up when the timer arms, so a change needs no reboot.
 
+Each BLE burst gives the frames the app acts on (LAP, ARMED, DISARMED, RACE, IGNORED, HEARTBEAT) most of its airtime and the OSD `TEXT` a short slot each. Then it echoes the key frames 0.7, 1.5 and 2.4 s later: phones only listen part of the time (a Xiaomi on Wi-Fi heard 20-30% of adverts, worst just after the app starts), so a single burst could be missed outright. The app drops the repeats by seq. See `cfg::BLE_*` in `config.h`.
+
 With both on, IDF's Wi-Fi/BT coexistence shares the 2.4 GHz radio and each burst sends ESP-NOW first (the goggles are what the pilot is watching), then BLE - so the app hears a lap ~0.5 s after the goggles. Lap times are timed on the timer, so that delay doesn't change them.
 
 Race messages go to every link that's on. On ESP-NOW they're ELRS Backpack OSD rows in CMRC live timing's format, the same rows and wording elrs-race-test sends and LapDog LCD decodes (the row tells LapDog LCD what a message is):
