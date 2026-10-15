@@ -55,7 +55,7 @@ Both boards have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 
 
 `tools/release.sh 1.2.3` sets `FIRMWARE_VERSION` in `include/config.h`, commits, tags `v1.2.3` and pushes. The tag runs `.forgejo/workflows/release.yml`: the native tests, then `tools/build-flash-images.py` builds every device in `devices.json` and publishes a Forgejo release with each one's `<id>-firmware.bin` and `<id>-factory.bin` (bootloader, partition table and app merged to flash at 0x0; offsets come from PlatformIO, and the C5's bootloader is at 0x2000), `.sha256` files and a `flash.json`. lapdog-web's `/flash` installs the latest non-prerelease. A suffixed tag (`v1.2.3-beta.1`) is published as a prerelease, which the flasher ignores. The version shows in `get` (`S:fw=`) and the boot log.
 
-The workflow pulls `vrxc-msp` over HTTPS with the `VRXC_READ_TOKEN` secret (a Forgejo token with `read:repository`), since it's private.
+The workflow pulls `vrxc-msp` (public) over HTTPS rather than the `ssh://` URL in `platformio.ini`.
 
 ## Layout
 

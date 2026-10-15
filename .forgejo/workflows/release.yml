@@ -14,9 +14,9 @@
 # (non-prerelease) release from here. Tags with a suffix (v1.2.3-beta.1) are published as
 # prereleases, which it ignores.
 #
-# vrxc-msp is a private repo pulled over ssh:// in platformio.ini, so the build rewrites that to
-# HTTPS with VRXC_READ_TOKEN (a Forgejo token with read:repository), falling back to the
-# workflow's own token, which is enough if vrxc-msp is public.
+# platformio.ini pulls vrxc-msp over ssh://, which the runner has no key for, so the build
+# rewrites that to HTTPS. vrxc-msp is public, so the workflow's own token is enough;
+# VRXC_READ_TOKEN (read:repository) is only needed if it's ever made private again.
 name: Release firmware
 
 on:
