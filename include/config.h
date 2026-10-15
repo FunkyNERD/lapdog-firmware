@@ -20,21 +20,16 @@ namespace cfg
 // --- Pins ----------------------------------------------------------------------
 // BOOT is a strapping pin on both chips: fine to read once running, just don't
 // hold it at power-on.
-#if CONFIG_IDF_TARGET_ESP32C3 && defined(LAPDOG_BOARD_01SPACE_C3)
-// 01Space ESP32-C3 0.42" OLED board - test build (env:c3_oled), the board
-// elrs-race-test runs on. Its LED is a WS2812 on GPIO 2, not driven here: the
-// OLED shows the state instead.
+#if CONFIG_IDF_TARGET_ESP32C3
+// 01Space ESP32-C3 0.42" OLED board - test build only (env:c3_oled), the board
+// elrs-race-test runs on. No SDR: laps come from `sim`. For testing ESP-NOW,
+// BLE, the USB console and the app. Its LED is a WS2812 on GPIO 2, not driven
+// here: the OLED shows the state instead.
 constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_9;
 constexpr gpio_num_t PIN_LED = GPIO_NUM_NC;
 constexpr bool LED_ACTIVE_LOW = false;
 constexpr gpio_num_t PIN_OLED_SDA = GPIO_NUM_5;
 constexpr gpio_num_t PIN_OLED_SCL = GPIO_NUM_6;
-#elif CONFIG_IDF_TARGET_ESP32C3
-// ESP32-C3 SuperMini - test build only (env:c3_test). No SDR: laps come from
-// `sim`. For testing ESP-NOW, BLE, the USB console and the app.
-constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_9;
-constexpr gpio_num_t PIN_LED = GPIO_NUM_8; // blue onboard LED, lit when low
-constexpr bool LED_ACTIVE_LOW = true;
 #else
 // Mini ESP32-C5 dev board - the real timer.
 constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_28;
@@ -44,7 +39,7 @@ constexpr bool LED_ACTIVE_LOW = false;
 #endif
 
 // Status OLED (SSD1306 72x40), on boards that have one. Build with
-// -DLAPDOG_OLED=0 to leave it dark (the board then runs exactly like c3_test).
+// -DLAPDOG_OLED=0 to leave it dark.
 #ifndef LAPDOG_OLED
 #define LAPDOG_OLED 0
 #endif

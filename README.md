@@ -18,18 +18,9 @@ pio device monitor
 pio test -e native
 ```
 
-### Testing on an ESP32-C3 SuperMini
-
-`env:c3_test` builds the same firmware for an ESP32-C3 SuperMini. The C3 can't do the SDR (2.4 GHz only), so the capture stub stays and laps come from `sim`, but ESP-NOW, the BLE advert burst, the USB console and the Android app all work as on the C5. BOOT is GPIO9 and the blue LED is GPIO8 (lit when low).
-
-```bash
-pio run -e c3_test -t upload
-pio device monitor -e c3_test
-```
-
 ### Testing on the 01Space ESP32-C3 0.42" OLED board
 
-`env:c3_oled` is the same test build for the 01Space board elrs-race-test runs on, with a status screen on its 72x40 OLED (SSD1306 on I2C, SDA GPIO5, SCL GPIO6). The screen follows the same frames the app gets:
+`env:c3_oled` builds the same firmware for the 01Space board elrs-race-test runs on. The C3 can't do the SDR (2.4 GHz only), so the capture stub stays and laps come from `sim`, but ESP-NOW, the BLE advert burst, the USB console and the Android app all work as on the C5. It adds a status screen on the board's 72x40 OLED (SSD1306 on I2C, SDA GPIO5, SCL GPIO6), which follows the same frames the app gets:
 
 | State | Screen |
 | --- | --- |
