@@ -25,8 +25,14 @@
 //   row 15  lap time & total      "x L2:17.62 | T35.24 w"   (total from the start pass)
 // Times are CMRC's: hundredths, minutes only once there are any. On the HDZero
 // font the lone lower-case 'w' and 'x' draw as decorative glyphs. GO, lap
-// results and FINISHED are cleared again after a while (tick()), like the
-// timers do. LapDog is a single-pilot timer, so the position is always P1.
+// results and FINISHED are cleared again after a while (tick(), which keeps
+// running after disarm for that), like the timers do. LapDog is a single-pilot
+// timer, so the position is always P1.
+//
+// Ending a heat: a race finishes itself at its limit. Disarming a practice
+// heat (or a race still under way) sends the same FINISHED + result, so
+// RacePanel ends the heat but keeps its laps on screen; the next arm's OSD
+// clear wipes them. Disarming before any lap has started just clears the OSD.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -81,7 +87,7 @@ struct Messages
 {
     bool event;       // event name on row 0
     bool heat;        // "HEAT 4" on row 2
-    bool startFinish; // stage / GO / finish on row 5, result on rows 6-7 (race mode only)
+    bool startFinish; // stage / GO / FINISHED on row 5, result on rows 6-7 (FINISHED also ends a practice heat on disarm)
     bool laps;        // position & lap on row 3, each lap's time on row 15
     bool best;        // app only: CMRC's lap row has no room for a callout (LAP frames carry LAP_BEST)
     char stage[MSG_MAX + 1];
@@ -220,18 +226,30 @@ public:
         sink_.flush();
     }
 
-    void disarm()
+    // finish: end the heat on the OSD with FINISHED and its total (RacePanel
+    // keeps the laps up). false abandons it instead - the OSD is just cleared
+    // (a restart of the same heat).
+    void disarm(uint32_t nowMs, bool finish = true)
     {
         if (!armed()) return;
+        Stage was = stage_;
         stage_ = IDLE;
-        clearStatusAt_ = clearLapResultAt_ = 0;
         lapframe::Frame f = base(lapframe::DISARMED);
         f.heat = setup_.heat;
         f.lapLimit = lapsDone_;
         f.ignored = ignored_;
         sink_.frame(f);
-        // Like a timer clearing the laps: wipes the goggles, and tells RacePanel the heat is over.
-        osdClear();
+        bool timing = (was == PRACTICE_RUN || was == RACING) && started_;
+        if (finish && timing)
+            // Total to the last gate pass: from the first pass (practice) or GO (race).
+            this->finish(lastPassMs_ - (was == RACING ? goMs_ : startPassMs_), nowMs);
+        else if (!finish || was != FINISHED)
+        {
+            // Nothing timed yet (or abandoned): wipe the goggles, which also
+            // tells RacePanel there's no heat. A finished race keeps its results.
+            clearStatusAt_ = clearLapResultAt_ = 0;
+            osdClear();
+        }
         sink_.flush();
     }
 
@@ -420,16 +438,17 @@ private:
         return flags;
     }
 
-    // Race over for this pilot: "FINISHED!", then place and total from GO on rows 6-7.
-    void finish(uint32_t passMs)
+    // Heat over for this pilot: "FINISHED!", then place and total on rows 6-7.
+    // atMs: when it was sent (FINISHED clears FINISH_UPTIME_MS later).
+    void finish(uint32_t totalMs, uint32_t atMs)
     {
         if (setup_.msg.laps) row(ROW_LAP, "");
         if (!setup_.msg.startFinish) return;
         status(setup_.msg.finish);
-        schedule(clearStatusAt_, passMs + FINISH_UPTIME_MS);
+        schedule(clearStatusAt_, atMs + FINISH_UPTIME_MS);
         row(ROW_RESULTS, "P1");
         char t[16], text[20];
-        cmrcTime(passMs - goMs_, t, sizeof(t));
+        cmrcTime(totalMs, t, sizeof(t));
         snprintf(text, sizeof(text), "T%s", t);
         row(ROW_RESULTS + 1, text);
     }
@@ -466,7 +485,7 @@ private:
         if (final)
         {
             stage_ = FINISHED;
-            finish(passMs);
+            finish(passMs - goMs_, passMs);
             raceFrame(passMs - goMs_);
         }
         sink_.flush();

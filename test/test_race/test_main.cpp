@@ -281,17 +281,100 @@ void test_disarm()
     s.pass(0);
     s.pass(15000);
     r.clear();
-    s.disarm();
+    s.disarm(16000);
     TEST_ASSERT_FALSE(s.armed());
     auto d = r.of(lapframe::DISARMED);
     TEST_ASSERT_EQUAL(1, d.size());
     TEST_ASSERT_EQUAL(4, d[0].heat);
     TEST_ASSERT_EQUAL(1, d[0].lapLimit);
-    TEST_ASSERT_EQUAL(2, r.clears); // arm, then disarm clears the goggles (and ends RacePanel's race)
-    bool sawClear = false;
-    for (const auto &f : r.of(lapframe::TEXT)) sawClear = sawClear || f.slot == lapframe::SLOT_OSD_CLEAR;
-    TEST_ASSERT_TRUE(sawClear);
-    s.disarm(); // already idle: nothing
+    s.disarm(17000); // already idle: nothing
+    TEST_ASSERT_EQUAL(1, r.of(lapframe::DISARMED).size());
+}
+
+void test_practice_disarm_finishes_with_total()
+{
+    // Like a race finishing: RacePanel ends the heat and keeps the laps up, no OSD clear.
+    Recorder r;
+    Session s(r);
+    s.arm(setup(PRACTICE), 0);
+    s.pass(1000);
+    s.pass(15630);
+    s.pass(30000);
+    r.clear();
+    int clears = r.clears;
+    s.disarm(31000);
+    TEST_ASSERT_EQUAL(clears, r.clears);
+    TEST_ASSERT_EQUAL(4, r.osdRows.size());
+    TEST_ASSERT_EQUAL_STRING("3:", r.osdRows[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("5:w FINISHED! x", r.osdRows[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("6:P1", r.osdRows[2].c_str());
+    TEST_ASSERT_EQUAL_STRING("7:T29.00", r.osdRows[3].c_str()); // first pass to last pass
+    TEST_ASSERT_EQUAL(1, r.bursts);
+
+    r.clear();
+    s.tick(32999);
+    TEST_ASSERT_FALSE(hasRow(r, "5:"));
+    s.tick(33000); // FINISHED clears after FINISH_UPTIME_MS, idle or not
+    TEST_ASSERT_TRUE(hasRow(r, "5:"));
+    s.tick(34000); // and the last lap result 4 s after its pass
+    TEST_ASSERT_TRUE(hasRow(r, "15:"));
+}
+
+void test_disarm_before_any_lap_clears()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(PRACTICE), 0);
+    r.clear();
+    int clears = r.clears;
+    s.disarm(5000);
+    TEST_ASSERT_EQUAL(clears + 1, r.clears);
+    TEST_ASSERT_FALSE(hasRow(r, "5:w FINISHED! x"));
+}
+
+void test_restart_abandons()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(PRACTICE), 0);
+    s.pass(0);
+    s.pass(15000);
+    r.clear();
+    int clears = r.clears;
+    s.disarm(16000, false);
+    TEST_ASSERT_EQUAL(clears + 1, r.clears);
+    TEST_ASSERT_FALSE(hasRow(r, "5:w FINISHED! x"));
+}
+
+void test_race_disarm_mid_race_finishes_from_go()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(RACE, LIMIT_LAPS, 5), 1000);
+    s.tick(0);
+    s.tick(1000); // GO at 1000
+    s.pass(5671);
+    s.pass(20301);
+    r.clear();
+    s.disarm(25000);
+    TEST_ASSERT_TRUE(hasRow(r, "5:w FINISHED! x"));
+    TEST_ASSERT_TRUE(hasRow(r, "7:T19.30")); // GO to the last pass
+}
+
+void test_finished_race_disarm_keeps_results()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(RACE, LIMIT_LAPS, 1), 0);
+    s.tick(0);
+    s.tick(0);
+    s.pass(4000);
+    s.pass(19000); // finished
+    r.clear();
+    int clears = r.clears;
+    s.disarm(30000);
+    TEST_ASSERT_EQUAL(clears, r.clears);
+    TEST_ASSERT_EQUAL(0, r.osdRows.size());
     TEST_ASSERT_EQUAL(1, r.of(lapframe::DISARMED).size());
 }
 
@@ -311,7 +394,7 @@ void test_ignored_passes_are_reported_and_counted()
     TEST_ASSERT_EQUAL(2, ig[0].ignored);
     TEST_ASSERT_EQUAL(1, r.bursts);
     TEST_ASSERT_EQUAL(0, r.osdRows.size()); // app-only, not a goggle message
-    s.disarm();
+    s.disarm(0);
     TEST_ASSERT_EQUAL(2, r.of(lapframe::DISARMED)[0].ignored);
 }
 
@@ -340,6 +423,11 @@ int main()
     RUN_TEST(test_race_lap_limit_finishes);
     RUN_TEST(test_race_time_limit_finishes_on_next_pass);
     RUN_TEST(test_disarm);
+    RUN_TEST(test_practice_disarm_finishes_with_total);
+    RUN_TEST(test_disarm_before_any_lap_clears);
+    RUN_TEST(test_restart_abandons);
+    RUN_TEST(test_race_disarm_mid_race_finishes_from_go);
+    RUN_TEST(test_finished_race_disarm_keeps_results);
     RUN_TEST(test_ignored_passes_are_reported_and_counted);
     RUN_TEST(test_ignored_not_counted_while_staging);
     return UNITY_END();

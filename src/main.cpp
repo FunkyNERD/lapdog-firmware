@@ -69,7 +69,7 @@ static uint32_t millis() { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 static void disarm()
 {
-    session.disarm();
+    session.disarm(millis());
     sdr::end();
     currentStage = race::IDLE;
     led::set(led::IDLE);
@@ -123,12 +123,12 @@ static void handle(const Cmd &c, Detector &det)
         break;
     case CMD_NEW_HEAT:
         if (!app::armed()) break;
-        session.disarm();
+        session.disarm(millis()); // finishes this heat, so RacePanel logs it
         armNewHeat(lastArm, det);
         break;
     case CMD_RESTART:
         if (!app::armed()) break;
-        session.disarm();
+        session.disarm(millis(), false); // same heat again: abandon this run
         arm(lastArm, currentHeat, det);
         break;
     }
@@ -226,10 +226,11 @@ extern "C" void app_main()
             }
         }
 
+        // Also while idle: FINISHED and the last lap result still clear after disarm.
+        race::Stage before = session.stage();
+        session.tick(now);
         if (app::armed())
         {
-            race::Stage before = session.stage();
-            session.tick(now);
             // Laps (and the minimum lap time) count from GO, not from passes while staging.
             if (before == race::STAGING && session.stage() == race::RACING) det.reset();
             if (now - lastHeartbeat >= cfg::HEARTBEAT_MS)

@@ -55,7 +55,7 @@ Both boards have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 
 
 ### Sessions
 
-- **Practice:** the first gate pass starts lap 1; laps until disarmed.
+- **Practice:** the first gate pass starts lap 1; laps until disarmed. Disarming sends FINISHED and the total (first pass to last pass), like a race finish, so RacePanel ends the heat and keeps the laps on screen.
 - **Race:** stage ("ARM NOW") → random 1–3 s hold (`race.hold`) → "GO!" → the first pass is the holeshot → laps → "FINISHED!" at the lap limit, or on the first pass after the time limit.
 - The timer numbers heats itself: every arm takes `heat` and advances it (persisted straight away). `restart` reruns the same heat.
 
@@ -80,7 +80,7 @@ Race messages go to whichever link is selected. On ESP-NOW they're ELRS Backpack
 | 6–7 | Race result (total from GO) | `P1` / `T1:02.31` |
 | 15 | Lap time & total from the start pass (cleared after 4 s) | `x L2:17.62 \| T35.24 w` |
 
-Text is centred on the 50-column OSD, rows are cleared with 50 NULs, and frames go out 8 ms apart. GO and disarm clear the whole OSD. On BLE/USB the same row text goes out as LapDog `TEXT` frames (the app drops the `w`/`x` glyph letters), alongside the structured `ARMED`/`LAP`/`RACE` frames.
+Text is centred on the 50-column OSD, rows are cleared with 50 NULs, and frames go out 8 ms apart. GO, and each arm, clear the whole OSD. Disarming a heat that's timing sends FINISHED and the result (practice: first pass to last pass; race: GO to last pass), so RacePanel ends it but keeps the laps up; a finished race keeps its results, and `restart` (or disarming before any lap) just clears. On BLE/USB the same row text goes out as LapDog `TEXT` frames (the app drops the `w`/`x` glyph letters), alongside the structured `ARMED`/`LAP`/`RACE` frames.
 
 ## USB protocol
 
