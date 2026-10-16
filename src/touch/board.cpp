@@ -37,8 +37,8 @@ static constexpr bool DISPLAY_SWAP_XY = true;
 static constexpr bool DISPLAY_MIRROR_X = false;
 static constexpr bool DISPLAY_MIRROR_Y = false;
 static constexpr bool TOUCH_SWAP_XY = true;
-static constexpr bool TOUCH_MIRROR_X = false;
-static constexpr bool TOUCH_MIRROR_Y = true;
+static constexpr bool TOUCH_MIRROR_X = true;
+static constexpr bool TOUCH_MIRROR_Y = false;
 
 // IO expander pins: P0 touch reset, P1 LCD reset, P5 power to the panel.
 static esp_io_expander_handle_t expander = nullptr;
