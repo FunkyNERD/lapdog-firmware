@@ -34,5 +34,8 @@ unsigned gainMax(); // 0 until the radio has been tuned once
 bool setBandwidth(unsigned mhz); // 11-48 MHz, 0 = widest
 unsigned bandwidth();
 uint32_t captureErrors(); // snapshots that came back incomplete, since boot
+float levelDbfs();        // the last snapshot's power, dB relative to full scale
+void stats(uint32_t &captures, uint32_t &avgUs, uint32_t &recalibrations); // since the last call
+void dump();              // print the next snapshot's first raw words ("D:" line)
 
 } // namespace sdr

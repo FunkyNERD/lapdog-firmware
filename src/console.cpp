@@ -44,7 +44,17 @@ static bool handleSdr()
         printf("S:sdr.gainmax=%u\n", sdr::gainMax());
         printf("S:sdr.bw=%u\n", sdr::bandwidth());
         printf("S:sdr.level=%.1f\n", app::signalDb());
+        printf("S:sdr.dbfs=%.1f\n", sdr::levelDbfs());
         printf("S:sdr.errors=%lu\n", (unsigned long)sdr::captureErrors());
+        uint32_t n, us, recals;
+        sdr::stats(n, us, recals);
+        printf("S:sdr.captures=%lu\nS:sdr.capture_us=%lu\nS:sdr.recals=%lu\n", (unsigned long)n, (unsigned long)us,
+               (unsigned long)recals);
+        return true;
+    }
+    if (!strcmp(what, "dump"))
+    {
+        sdr::dump();
         return true;
     }
     if (!v || !sdr::available()) return false;

@@ -167,6 +167,10 @@ static app::ArmRequest buttonArm()
 extern "C" void app_main()
 {
     ESP_LOGI(TAG, "%s", "LapDog timer v" FIRMWARE_VERSION);
+    // The timing loop outranks everything but the radio stacks: on the single-core
+    // C5 the touch screen's drawing (priority 3) would otherwise starve it while a
+    // heat runs. It sleeps SAMPLE_PERIOD_MS each pass, so the screen still gets time.
+    vTaskPrioritySet(nullptr, cfg::TIMING_TASK_PRIORITY);
     cmds = xQueueCreate(4, sizeof(Cmd));
     settings::begin();
     led::begin();

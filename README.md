@@ -4,7 +4,7 @@
 
 LapDog timer firmware for **ESP32-C5** boards (a mini dev board, or the Waveshare 3.5" touch board): listens on a 5.8 GHz video channel with ESP-SDR, detects the RSSI peak as the drone passes the gate, and reports laps and race messages over USB plus **either** BLE **or** ESP-NOW (VRxC_ELRS OSD on HDZero goggles and LapDog LCD). Design notes are in the project-level `CLAUDE.md`.
 
-**Status: bring-up.** Practice and race sessions, heat numbering, settings, USB, ESP-NOW and the NimBLE advert burst work (tested on the C3). The C5 receive path is ported from ESP-SDR (`src/esp_sdr/`) and builds, but hasn't captured on hardware yet; `sim` still adds synthetic passes on any board.
+**Status: bring-up.** Practice and race sessions, heat numbering, settings, USB, ESP-NOW and the NimBLE advert burst work (tested on the C3). The C5 receive path is ported from ESP-SDR (`src/esp_sdr/`) and captures on the Waveshare touch board (a steady -52 dBFS floor with nothing transmitting, ~150 snapshots a second while armed, clean after every BLE burst); it hasn't seen a quad yet. `sim` still adds synthetic passes on any board.
 
 ## Licence
 
@@ -63,11 +63,13 @@ The board's component (`boards/c5_touch/lapdog_touch/`, with LVGL and the displa
 
 ### SDR (C5)
 
-The receive side of ESP-SDR, ported in `src/esp_sdr/` without its serial protocol: tune, re-measure RX DC at the channel's frequency, fixed gain, and one short raw I/Q snapshot per sample (1024 samples at 20 MS/s through a ~20 MHz analog filter, every 5 ms). `sdr.cpp` turns each snapshot into power in dBFS, and the detector compares that with an in-room baseline it tracks itself (down quickly, up slowly, never during a peak). Wi-Fi stays up on the C5 even with ESP-NOW off, because it powers and calibrates the PHY.
+The receive side of ESP-SDR, ported in `src/esp_sdr/` without its serial protocol: tune, re-measure RX DC at the channel's frequency, fixed gain, and one short raw I/Q snapshot per sample (1024 samples at 20 MS/s through a ~20 MHz analog filter, every 5 ms). `sdr.cpp` turns each snapshot into power in dBFS, and the detector compares that with an in-room baseline it tracks itself (down quickly, up slowly, never during a peak). Wi-Fi stays up on the C5 even with ESP-NOW off, in promiscuous mode as ESP-SDR runs it: it powers and calibrates the PHY, and without promiscuous mode the receive chain is idle and every sample comes back the same.
 
 The capture needs the PHY's RF test library and debug hooks (`sdkconfig.defaults.esp32c5`), two linker wraps, and the 128 KB SRAM bank at 0x40820000 that the modem writes samples into, so all static code and data has to end below it (`src/esp_sdr/sram_guard.ld`; the build fails if it doesn't). ESP-SDR is qualified against the PHY libraries of a newer ESP-IDF than the 5.5.5 this builds with; the functions it calls are all there, but its calibration offsets are unconfirmed until it runs.
 
-Bring-up from the console: `sdr` prints the receiver state, `sdr gain <index|auto>` and `sdr bw <MHz|0>` change the gain and analog bandwidth until the next reboot, and `rssi on` streams the level.
+Internal RAM is the tight spot: the capture bank takes 128 KB of the C5's 320 KB. So Wi-Fi gets few buffers (it only sends ESP-NOW), and on the touch board LVGL allocates from PSRAM (`lv_mem_psram.c`) and draws through two small internal DMA buffers. The timing loop runs at priority 6, above the screen's drawing, so a busy screen can't slow the sampling on the single-core C5.
+
+Bring-up from the console: `sdr` prints the receiver state (gain, level, last snapshot in dBFS, errors, and captures and time per capture since the last `sdr`), `sdr dump` prints the next snapshot's first raw words, `sdr gain <index|auto>` and `sdr bw <MHz|0>` change the gain and analog bandwidth until the next reboot, and `rssi on` streams the level.
 
 ### Flash layout
 
@@ -158,8 +160,7 @@ F:212A03020139300000
 ## TODO
 
 - [ ] Confirm LED GPIO on the mini board (`config.h`)
-- [ ] First SDR capture on hardware: check `sdr` (gainmax non-zero, no errors), then a gate pass with `rssi on`, and pick the default gain and bandwidth
-- [ ] Check the touch board's orientation flags and the free heap with Wi-Fi, BLE and LVGL up
+- [ ] A real gate pass with `rssi on`: how far above the floor a quad reads, and pick the default gain and bandwidth
 - [ ] Measure SDR ↔ BLE/ESP-NOW switch time
 - [ ] Check the NimBLE advert burst with nRF Connect (20 ms interval; falls back to 100 ms if the controller refuses)
 - [ ] Measure how long BLE / Wi-Fi init takes when the timer arms with changed links

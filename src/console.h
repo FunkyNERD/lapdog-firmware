@@ -24,7 +24,8 @@
 //   rssi on|off              stream "R:<dB above baseline>" for calibration (idle too)
 //   sim                      inject a synthetic gate pass (works armed too)
 //   sdr                      receiver state: S:sdr=on|off|none, sdr.gain, sdr.gainmax,
-//                            sdr.bw, sdr.level (dB above baseline), sdr.errors
+//                            sdr.bw, sdr.level (dB above baseline), sdr.dbfs (last
+//                            snapshot, dB full scale), sdr.errors
 //   sdr gain <index>|auto    C5: fixed receive gain index, or the hardware AGC (not saved)
 //   sdr bw <MHz>|0           C5: analog bandwidth 11-48 MHz, 0 = widest (not saved)
 // Replies OK or ERR [reason]. Setting changes need the timer idle.

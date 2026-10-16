@@ -26,6 +26,8 @@ enum
 
 #define ESP_SDR_MAX_SAMPLES 16380u
 
+extern unsigned esp_sdr_recalibrations; // RX DC re-measurements since boot
+
 // Receive frequency in MHz (100-6000; the C5's front end covers 4.8-6.0 GHz on 5 GHz).
 // Takes effect on the next esp_sdr_prepare()/capture, re-measuring RX DC there.
 void esp_sdr_set_frequency(unsigned mhz);

@@ -61,6 +61,7 @@ int cmd_parse(char *cmd, char *name, int *argc, char **argv)
 }
 
 static unsigned frequency_mhz = 5800;
+unsigned esp_sdr_recalibrations;
 static bool rx_ready;
 static unsigned rx_channel_mode; // C5 PHY channel mode: 1 = wide analog path (rx_bandwidth.h)
 static int rx_analog_filter = -1; // -1 keeps the PHY-calibrated capacitance
@@ -243,6 +244,7 @@ void esp_sdr_prepare(void)
     if (rx_ready && !rx_recalibration_stale()) return;
     if (calibrated_mhz != frequency_mhz || rx_recalibration_stale())
     {
+        esp_sdr_recalibrations++;
         rx_recalibrate(frequency_mhz);
         calibrated_mhz = frequency_mhz;
     }

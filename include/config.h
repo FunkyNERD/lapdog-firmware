@@ -58,6 +58,7 @@ constexpr float DEFAULT_EXIT_DB = 5.0f;
 constexpr uint32_t DEFAULT_MIN_LAP_MS = 3000;  // shorter "laps" are a crash or bounce at the gate
 constexpr uint32_t DEFAULT_MAX_PEAK_MS = 1500; // longer peaks are a quad parked at the gate
 constexpr uint32_t SAMPLE_PERIOD_MS = 5;     // ~200 Hz band-power rate
+constexpr unsigned TIMING_TASK_PRIORITY = 6;  // above the console (5) and the touch UI (3)
 // The in-room baseline follows the level outside peaks: down quickly, up by this
 // fraction per sample (~2.5 s time constant at 200 Hz), never during a peak.
 constexpr float BASELINE_RISE = 0.002f;

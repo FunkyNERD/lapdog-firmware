@@ -7,6 +7,7 @@
 
 #include "config.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_now.h"
@@ -50,6 +51,8 @@ static void wifiStart(const uint8_t uid[6])
         if (err != ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(err);
         netifReady = true;
     }
+    // Internal RAM is the tight spot on the C5 (the SDR's bank takes 128 KB).
+    ESP_LOGI(TAG, "wifi start: internal heap free %u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&wcfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));

@@ -1,10 +1,13 @@
 #include "sdr.h"
 
 #include <math.h>
+#include <stdio.h>
 
 #include "config.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_timer.h"
+#include "esp_wifi.h"
 
 #if CONFIG_IDF_TARGET_ESP32C5
 #include "esp_sdr/esp_sdr_c5.h"
@@ -43,6 +46,7 @@ void sdr::simulatePass(uint32_t nowMs)
 bool sdr::running() { return isRunning; }
 void sdr::end() { isRunning = false; }
 uint32_t sdr::captureErrors() { return errors; }
+float sdr::levelDbfs() { return lastDb; }
 unsigned sdr::bandwidth() { return bandwidthMhz; }
 
 #if CONFIG_IDF_TARGET_ESP32C5
@@ -65,6 +69,11 @@ bool sdr::available() { return true; }
 
 bool sdr::begin(uint16_t freqMhz)
 {
+    // The RF test library logs a line per capture under "phy".
+    esp_log_level_set("phy", ESP_LOG_WARN);
+    // As ESP-SDR does: promiscuous keeps the Wi-Fi receive path running.
+    static bool promiscuous = false;
+    if (!promiscuous) promiscuous = esp_wifi_set_promiscuous(true) == ESP_OK;
     applyChanges();
     esp_sdr_set_frequency(freqMhz);
     esp_sdr_invalidate(); // after a burst the BT/Wi-Fi stacks have reset the PHY
@@ -95,13 +104,35 @@ static float snapshotDb(const uint32_t *iq, unsigned n)
     return 10.0f * log10f(p + 1e-12f);
 }
 
+static volatile bool dumpNext = false;
+static uint32_t captures = 0, captureUs = 0;
+void sdr::stats(uint32_t &n, uint32_t &avgUs, uint32_t &recals)
+{
+    n = captures;
+    avgUs = captures ? captureUs / captures : 0;
+    recals = esp_sdr_recalibrations;
+    captures = captureUs = 0;
+}
+void sdr::dump() { dumpNext = true; }
+
 float sdr::bandPowerDb(uint32_t nowMs)
 {
     if (isRunning)
     {
         applyChanges();
         const uint32_t *iq;
-        if (esp_sdr_capture(cfg::SDR_SAMPLES, cfg::SDR_RATE, &iq)) lastDb = snapshotDb(iq, cfg::SDR_SAMPLES);
+        int64_t t0 = esp_timer_get_time();
+        bool ok = esp_sdr_capture(cfg::SDR_SAMPLES, cfg::SDR_RATE, &iq);
+        captureUs += (uint32_t)(esp_timer_get_time() - t0);
+        captures++;
+        if (dumpNext)
+        {
+            dumpNext = false;
+            printf("D:%s", ok ? "ok" : "fail");
+            for (int i = 0; i < 16; i++) printf(" %08lx", (unsigned long)iq[i]);
+            printf("\n");
+        }
+        if (ok) lastDb = snapshotDb(iq, cfg::SDR_SAMPLES);
         else if (++errors % 100 == 1) ESP_LOGW(TAG, "incomplete capture (%lu so far)", (unsigned long)errors);
     }
     return lastDb + simBump(nowMs);
@@ -141,6 +172,8 @@ float sdr::bandPowerDb(uint32_t nowMs)
 }
 
 void sdr::setGain(int) {}
+void sdr::dump() {}
+void sdr::stats(uint32_t &n, uint32_t &avgUs, uint32_t &recals) { n = avgUs = recals = 0; }
 int sdr::gain() { return -1; }
 unsigned sdr::gainMax() { return 0; }
 bool sdr::setBandwidth(unsigned) { return false; }

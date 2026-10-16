@@ -27,15 +27,18 @@ static constexpr gpio_num_t PIN_LCD_CS = GPIO_NUM_8;
 static constexpr gpio_num_t PIN_TOUCH_INT = GPIO_NUM_3;
 static constexpr spi_host_device_t LCD_SPI = SPI2_HOST;
 static constexpr uint32_t LCD_PCLK_HZ = 60 * 1000 * 1000;
+// Draw buffers: the SPI DMA can't read PSRAM (it would need an internal copy of
+// the whole buffer per flush), so two small internal DMA buffers of 16 lines.
+static constexpr int DRAW_LINES = 16;
 
 // The panel is 320x480 portrait. Turned to landscape; if the picture or the
 // touch comes out mirrored on a board, these are the knobs.
 static constexpr bool DISPLAY_SWAP_XY = true;
-static constexpr bool DISPLAY_MIRROR_X = true;
-static constexpr bool DISPLAY_MIRROR_Y = true;
+static constexpr bool DISPLAY_MIRROR_X = false;
+static constexpr bool DISPLAY_MIRROR_Y = false;
 static constexpr bool TOUCH_SWAP_XY = true;
-static constexpr bool TOUCH_MIRROR_X = true;
-static constexpr bool TOUCH_MIRROR_Y = false;
+static constexpr bool TOUCH_MIRROR_X = false;
+static constexpr bool TOUCH_MIRROR_Y = true;
 
 // IO expander pins: P0 touch reset, P1 LCD reset, P5 power to the panel.
 static esp_io_expander_handle_t expander = nullptr;
@@ -97,7 +100,7 @@ lv_display_t *board::begin()
     bus.miso_io_num = PIN_SD_MISO;
     bus.quadwp_io_num = GPIO_NUM_NC;
     bus.quadhd_io_num = GPIO_NUM_NC;
-    bus.max_transfer_sz = WIDTH * 40 * sizeof(uint16_t);
+    bus.max_transfer_sz = WIDTH * DRAW_LINES * sizeof(uint16_t);
     ESP_ERROR_CHECK(spi_bus_initialize(LCD_SPI, &bus, SPI_DMA_CH_AUTO));
 
     esp_lcd_panel_io_handle_t io = nullptr;
@@ -125,22 +128,24 @@ lv_display_t *board::begin()
     lvgl_port_cfg_t portCfg = ESP_LVGL_PORT_INIT_CONFIG();
     portCfg.task_priority = 3; // under the timing loop: drawing never delays a pass
     portCfg.task_stack = 8192;
+    portCfg.task_stack_caps = MALLOC_CAP_SPIRAM; // internal RAM is short: the SDR bank takes 128 KB
     ESP_ERROR_CHECK(lvgl_port_init(&portCfg));
 
     lvgl_port_display_cfg_t dispCfg = {};
     dispCfg.io_handle = io;
     dispCfg.panel_handle = panel;
-    dispCfg.buffer_size = WIDTH * 40;
+    dispCfg.buffer_size = WIDTH * DRAW_LINES;
     dispCfg.double_buffer = true;
-    dispCfg.hres = 320;
-    dispCfg.vres = 480;
+    // LVGL's size is the landscape one; the panel itself is turned by swap_xy below.
+    dispCfg.hres = WIDTH;
+    dispCfg.vres = HEIGHT;
     dispCfg.monochrome = false;
     dispCfg.color_format = LV_COLOR_FORMAT_RGB565;
     dispCfg.rotation.swap_xy = DISPLAY_SWAP_XY;
     dispCfg.rotation.mirror_x = DISPLAY_MIRROR_X;
     dispCfg.rotation.mirror_y = DISPLAY_MIRROR_Y;
-    dispCfg.flags.buff_dma = false;
-    dispCfg.flags.buff_spiram = true;
+    dispCfg.flags.buff_dma = true;
+    dispCfg.flags.buff_spiram = false;
     dispCfg.flags.swap_bytes = true;
     lv_display_t *disp = lvgl_port_add_disp(&dispCfg);
     if (!disp) return nullptr;
