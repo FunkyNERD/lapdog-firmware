@@ -93,6 +93,17 @@ static void espnowStop()
     if (!cfg::HAS_SDR) wifiStop();
 }
 
+// The SDR tunes the PHY itself (to the video channel, transmitter off) behind
+// the Wi-Fi driver's back, which still thinks it's on ESPNOW_CHANNEL - so ESP-NOW
+// frames went nowhere. A channel change makes the driver tune the PHY again; it
+// skips a change to the channel it believes it's on, hence the detour.
+static void wifiRetune()
+{
+    if (!cfg::HAS_SDR || !wifiOn) return;
+    esp_wifi_set_channel(cfg::ESPNOW_CHANNEL == 1 ? 6 : 1, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_channel(cfg::ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+}
+
 static void espnowSend(const uint8_t *frame, size_t n)
 {
     if (!n) return;
@@ -264,7 +275,11 @@ public:
         bool resume = sdr::running();
         if (resume) sdr::end();
         // ESP-NOW first: the goggles are what the pilot is looking at.
-        if (rows_ || clear_) sendEspnow();
+        if (rows_ || clear_)
+        {
+            wifiRetune();
+            sendEspnow();
+        }
         if (frames_) sendBle();
         frames_ = rows_ = 0;
         clear_ = false;
