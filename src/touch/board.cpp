@@ -26,7 +26,7 @@ static constexpr gpio_num_t PIN_LCD_MOSI = GPIO_NUM_7;
 static constexpr gpio_num_t PIN_SD_MISO = GPIO_NUM_2;
 static constexpr gpio_num_t PIN_LCD_DC = GPIO_NUM_5;
 static constexpr gpio_num_t PIN_LCD_CS = GPIO_NUM_8;
-static constexpr gpio_num_t PIN_TOUCH_INT = GPIO_NUM_3;
+static constexpr gpio_num_t PIN_TOUCH_INT = GPIO_NUM_3; // unused: touch is polled
 static constexpr spi_host_device_t LCD_SPI = SPI2_HOST;
 static constexpr uint32_t LCD_PCLK_HZ = 60 * 1000 * 1000;
 // Draw buffers: the SPI DMA can't read PSRAM (it would need an internal copy of
@@ -208,7 +208,10 @@ lv_display_t *board::begin(void (*firstFrame)())
     touchCfg.x_max = 320;
     touchCfg.y_max = 480;
     touchCfg.rst_gpio_num = GPIO_NUM_NC; // on the IO expander
-    touchCfg.int_gpio_num = PIN_TOUCH_INT;
+    // Polled, not interrupt-driven: with an INT pin the port only reads on an
+    // edge, and after another firmware had run on the board the FT6336 saw
+    // touches but never pulsed INT - so the screen went dead until power-off.
+    touchCfg.int_gpio_num = GPIO_NUM_NC;
     touchCfg.flags.swap_xy = TOUCH_SWAP_XY;
     touchCfg.flags.mirror_x = TOUCH_MIRROR_X;
     touchCfg.flags.mirror_y = TOUCH_MIRROR_Y;
