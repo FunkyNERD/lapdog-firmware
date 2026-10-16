@@ -29,5 +29,10 @@ void requestNewHeat(); // armed: end this heat, start the next with the same mod
 void requestRestart(); // armed: run this heat again from the start
 void simulatePass();
 void setRssiStream(bool on);
+// Live signal for the touch screen's calibration graph: runs the SDR while idle
+// too, like "rssi on" (without the USB stream). signalDb() is the smoothed
+// level above the in-room baseline, updated every sample while the SDR runs.
+void setLiveSignal(bool on);
+float signalDb();
 
 } // namespace app

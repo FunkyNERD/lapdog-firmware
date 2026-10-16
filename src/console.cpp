@@ -10,6 +10,7 @@
 #include "driver/usb_serial_jtag_vfs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdr.h"
 #include "settings.h"
 
 static void printSettings()
@@ -22,6 +23,44 @@ static void printSettings()
     const char *state = !app::armed() ? "idle" : app::stage() == race::PRACTICE_RUN ? "practice" : "race";
     printf("S:state=%s\n", state);
     printf("S:fw=%s\n", FIRMWARE_VERSION);
+}
+
+// "sdr": receiver state. "sdr gain <index|auto>", "sdr bw <MHz|0>": bring-up
+// tuning, applied between captures and not saved.
+static bool handleSdr()
+{
+    char *what = strtok(nullptr, " ");
+    char *v = strtok(nullptr, " ");
+    if (!what)
+    {
+        if (!sdr::available())
+        {
+            printf("S:sdr=none\n");
+            return true;
+        }
+        printf("S:sdr=%s\n", sdr::running() ? "on" : "off");
+        if (sdr::gain() < 0) printf("S:sdr.gain=auto\n");
+        else printf("S:sdr.gain=%d\n", sdr::gain());
+        printf("S:sdr.gainmax=%u\n", sdr::gainMax());
+        printf("S:sdr.bw=%u\n", sdr::bandwidth());
+        printf("S:sdr.level=%.1f\n", app::signalDb());
+        printf("S:sdr.errors=%lu\n", (unsigned long)sdr::captureErrors());
+        return true;
+    }
+    if (!v || !sdr::available()) return false;
+    if (!strcmp(what, "gain"))
+    {
+        if (!strcmp(v, "auto")) sdr::setGain(-1);
+        else
+        {
+            long n = atol(v);
+            if (n < 0 || n > 127) return false;
+            sdr::setGain((int)n);
+        }
+        return true;
+    }
+    if (!strcmp(what, "bw")) return sdr::setBandwidth((unsigned)atol(v));
+    return false;
 }
 
 static bool handleArm()
@@ -69,6 +108,7 @@ static void handleLine(char *line)
         app::setRssiStream(v && !strcmp(v, "on"));
     }
     else if (!strcmp(cmd, "disarm")) app::requestDisarm();
+    else if (!strcmp(cmd, "sdr")) ok = handleSdr();
     else if (!strcmp(cmd, "heat"))
     {
         char *v = strtok(nullptr, " ");

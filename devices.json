@@ -12,6 +12,18 @@
         ]
     },
     {
+        "id": "c5-touch",
+        "env": "c5_touch",
+        "name": "Waveshare ESP32-C5 3.5\" touch (timer)",
+        "chip": "esp32c5",
+        "chipFamily": "ESP32-C5",
+        "description": "The LapDog timer with a 480x320 touchscreen: arm it, watch your laps and change every setting without a phone. Fit a 5.8 GHz antenna to the U.FL connector.",
+        "instructions": [
+            "Plug the board into this computer with a USB-C data cable. It shows up as a USB JTAG/serial port, no driver needed.",
+            "If it isn't found, hold BOOT while you plug it in (or press RESET while holding BOOT), then let go and try again."
+        ]
+    },
+    {
         "id": "c3-oled",
         "env": "c3_oled",
         "name": "01Space ESP32-C3 0.42\" OLED (test build)",

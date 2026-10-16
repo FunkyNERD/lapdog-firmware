@@ -1,0 +1,5 @@
+esp_lcd_touch_ft6336.c and include/esp_lcd_touch_ft6336.h are from Waveshare's
+ESP32-C5-Touch-LCD-3.5 demos (https://github.com/waveshareteam/ESP32-C5-Touch-LCD-3.5,
+example/ESP-IDF-V554/*/components/esp_lcd_touch_ft6336), licensed under the
+Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+Unmodified.

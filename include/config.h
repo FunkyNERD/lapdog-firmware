@@ -58,6 +58,25 @@ constexpr float DEFAULT_EXIT_DB = 5.0f;
 constexpr uint32_t DEFAULT_MIN_LAP_MS = 3000;  // shorter "laps" are a crash or bounce at the gate
 constexpr uint32_t DEFAULT_MAX_PEAK_MS = 1500; // longer peaks are a quad parked at the gate
 constexpr uint32_t SAMPLE_PERIOD_MS = 5;     // ~200 Hz band-power rate
+// The in-room baseline follows the level outside peaks: down quickly, up by this
+// fraction per sample (~2.5 s time constant at 200 Hz), never during a peak.
+constexpr float BASELINE_RISE = 0.002f;
+
+// --- SDR (C5) -----------------------------------------------------------------
+// One snapshot per sample: SDR_SAMPLES complex samples at SDR_RATE (0..5 = 80,
+// 40, 20, 10, 8, 4 MS/s) through an analog filter about SDR_BANDWIDTH_MHZ wide
+// (an analog video channel is ~18 MHz). Fixed gain: the AGC would flatten the
+// gate-pass peak. All tunable from the console ("sdr ...") during bring-up.
+#if CONFIG_IDF_TARGET_ESP32C5
+constexpr bool HAS_SDR = true;
+#else
+constexpr bool HAS_SDR = false;
+#endif
+constexpr unsigned SDR_SAMPLES = 1024;
+constexpr unsigned SDR_RATE = 2; // 20 MS/s: ~51 us per snapshot
+constexpr unsigned SDR_BANDWIDTH_MHZ = 20;
+constexpr int SDR_GAIN = 40;     // PHY gain index; -1 = hardware AGC
+constexpr float SDR_STUB_FLOOR_DB = -90.0f; // what the C3's stand-in reads
 
 // --- Outputs -----------------------------------------------------------------
 constexpr uint32_t HEARTBEAT_MS = 5000;      // while armed

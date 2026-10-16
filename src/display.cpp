@@ -2,7 +2,11 @@
 
 #include "config.h"
 
-#if !LAPDOG_OLED
+#if LAPDOG_TOUCH
+
+// The touch board's screens are in src/touch/.
+
+#elif !LAPDOG_OLED
 
 void display::begin() {}
 void display::frame(const lapframe::Frame &) {}

@@ -110,6 +110,36 @@ void test_parked_check_can_be_disabled()
     TEST_ASSERT_EQUAL(PassResult::PASS, runParked(d, 21000, 8000, pass));
 }
 
+void test_tracked_baseline_follows_the_room()
+{
+    // No setBaseline(): the floor comes from the room, wherever it sits.
+    Detector d(P);
+    d.trackBaseline(0.01f);
+    Pass pass;
+    uint32_t t = 0;
+    for (; t < 2000; t += 5) d.feed(-42.0f, t, pass);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, -42.0f, d.baseline());
+    // A gate pass 20 dB up counts, and doesn't lift the floor while it lasts.
+    PassResult got = PassResult::NONE;
+    for (uint32_t end = t + 300; t < end; t += 5)
+    {
+        PassResult r = d.feed(-22.0f, t, pass);
+        if (r != PassResult::NONE) got = r;
+    }
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, -42.0f, d.baseline());
+    for (uint32_t end = t + 50; t < end; t += 5)
+    {
+        PassResult r = d.feed(-42.0f, t, pass);
+        if (r != PassResult::NONE) got = r;
+    }
+    TEST_ASSERT_EQUAL(PassResult::PASS, got);
+    // The room getting quieter is followed quickly, louder only slowly.
+    for (uint32_t end = t + 100; t < end; t += 5) d.feed(-50.0f, t, pass);
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, -50.0f, d.baseline());
+    for (uint32_t end = t + 100; t < end; t += 5) d.feed(-45.0f, t, pass);
+    TEST_ASSERT_TRUE(d.baseline() < -48.0f);
+}
+
 void test_normal_pass_is_not_too_long()
 {
     Detector d = make();
@@ -130,5 +160,6 @@ int main()
     RUN_TEST(test_pass_right_after_parked_quad_counts);
     RUN_TEST(test_parked_check_can_be_disabled);
     RUN_TEST(test_normal_pass_is_not_too_long);
+    RUN_TEST(test_tracked_baseline_follows_the_room);
     return UNITY_END();
 }

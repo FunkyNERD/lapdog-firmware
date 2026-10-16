@@ -33,7 +33,12 @@ static uint8_t activeUid[6];
 
 // --- ESP-NOW -------------------------------------------------------------------
 
-static void espnowStart(const uint8_t uid[6])
+// Wi-Fi carries ESP-NOW, and on the C5 it also powers and calibrates the PHY the
+// SDR captures with - so there it stays up even with ESP-NOW off.
+static bool wifiOn = false;
+static uint8_t wifiMac[6];
+
+static void wifiStart(const uint8_t uid[6])
 {
     // Like the ELRS backpack: our own MAC *is* the bind-phrase UID, and the
     // goggles/LapDog LCD accept frames from it.
@@ -51,8 +56,25 @@ static void espnowStart(const uint8_t uid[6])
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_mac(WIFI_IF_STA, uid));
     ESP_ERROR_CHECK(esp_wifi_start());
+    // Never modem-sleep: the radio has to stay on for the SDR between bursts.
+    esp_wifi_set_ps(WIFI_PS_NONE);
     // 2.4 GHz only: 5 GHz ESP-NOW (ch 149-165) lands on the FPV video band.
     ESP_ERROR_CHECK(esp_wifi_set_channel(cfg::ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
+    memcpy(wifiMac, uid, 6);
+    wifiOn = true;
+}
+
+static void wifiStop()
+{
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    wifiOn = false;
+}
+
+static void espnowStart(const uint8_t uid[6])
+{
+    if (wifiOn && memcmp(wifiMac, uid, 6)) wifiStop(); // a new MAC needs a restart
+    if (!wifiOn) wifiStart(uid);
     ESP_ERROR_CHECK(esp_now_init());
 
     esp_now_peer_info_t p = {};
@@ -65,8 +87,7 @@ static void espnowStart(const uint8_t uid[6])
 static void espnowStop()
 {
     esp_now_deinit();
-    esp_wifi_stop();
-    esp_wifi_deinit();
+    if (!cfg::HAS_SDR) wifiStop();
 }
 
 static void espnowSend(const uint8_t *frame, size_t n)
@@ -199,6 +220,7 @@ void outputs::setLinks(uint8_t links, const uint8_t uid[6])
         espnowStart(uid);
         espnowOn = true;
     }
+    if (cfg::HAS_SDR && !wifiOn) wifiStart(uid);
     ESP_LOGI(TAG, "radio output: BLE %s, ESP-NOW %s", bleOn ? "on" : "off", espnowOn ? "on" : "off");
 }
 

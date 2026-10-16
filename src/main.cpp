@@ -44,6 +44,8 @@ struct Cmd
 static QueueHandle_t cmds;
 static volatile bool simRequested = false;
 static volatile bool rssiStream = false;
+static volatile bool liveWanted = false;  // the touch screen's live signal
+static volatile float liveDb = 0;         // smoothed level above the baseline
 static volatile race::Stage currentStage = race::IDLE;
 static volatile uint16_t currentHeat = 0;
 static uint32_t idleBeatsUntil = 0; // millis(): idle heartbeats until then, after a disarm (0 = none)
@@ -71,6 +73,8 @@ race::Stage app::stage() { return currentStage; }
 uint16_t app::sessionHeat() { return currentHeat; }
 void app::simulatePass() { simRequested = true; }
 void app::setRssiStream(bool on) { rssiStream = on; }
+void app::setLiveSignal(bool on) { liveWanted = on; }
+float app::signalDb() { return liveDb; }
 
 static void send(CmdType t, const app::ArmRequest *r = nullptr)
 {
@@ -113,8 +117,7 @@ static void arm(const app::ArmRequest &r, uint16_t heat, Detector &det)
     }
     lastArm = r;
     det = Detector(timer_settings::detectorParams(s));
-    // TODO: measure the in-room baseline over a second or so instead.
-    det.setBaseline(-90.0f);
+    det.trackBaseline(cfg::BASELINE_RISE);
     idleBeatsUntil = 0;
     sdr::begin(s.freqMhz);
     session.arm(setup, timer_settings::holdMs(s, esp_random()));
@@ -204,14 +207,14 @@ extern "C" void app_main()
         }
 
         // Live signal for calibration works idle too: the radio is free then.
-        bool wantIdleSdr = !app::armed() && rssiStream;
+        bool wantIdleSdr = !app::armed() && (rssiStream || liveWanted);
         if (wantIdleSdr != calibrating)
         {
             calibrating = wantIdleSdr;
             if (calibrating)
             {
                 det = Detector(timer_settings::detectorParams(settings::get()));
-                det.setBaseline(-90.0f);
+                det.trackBaseline(cfg::BASELINE_RISE);
                 sdr::begin(settings::get().freqMhz);
             }
             else if (!app::armed())
@@ -241,6 +244,7 @@ extern "C" void app_main()
                                 soon ? p.lapMs : p.durationMs);
                 ESP_LOGI(TAG, "pass ignored: %s", soon ? "too soon" : "too long (parked?)");
             }
+            liveDb = det.smoothed() - det.baseline();
             if (rssiStream && now - lastRssi >= 50)
             {
                 lastRssi = now;

@@ -13,6 +13,11 @@
 //             it's picked up the exit would otherwise count as a lap)
 // Rejected peaks don't move the lap reference, so the next real pass still
 // times from the last counted one.
+//
+// The baseline (the in-room level) is either fixed with setBaseline() or, after
+// trackBaseline(rise), tracked: it starts at the first sample, follows the
+// smoothed level down quickly and up only slowly, and holds still during a
+// peak - so a pass never lifts its own floor.
 
 #include <stdint.h>
 
@@ -51,9 +56,16 @@ public:
         inPeak_ = false;
         haveLast_ = false;
         haveEma_ = false;
+        haveBaseline_ = false;
     }
 
-    void setBaseline(float db) { baseline_ = db; }
+    void setBaseline(float db)
+    {
+        baseline_ = db;
+        haveBaseline_ = true;
+    }
+    // rise: per-sample pull up towards the level outside peaks (0 = fixed baseline).
+    void trackBaseline(float rise) { rise_ = rise; }
     float baseline() const { return baseline_; }
     float smoothed() const { return ema_; }
     bool inPeak() const { return inPeak_; }
@@ -64,6 +76,14 @@ public:
     {
         ema_ = haveEma_ ? ema_ + p_.emaAlpha * (db - ema_) : db;
         haveEma_ = true;
+        // Not during a peak, nor on the sample that starts one.
+        if (rise_ > 0 && !inPeak_ && !(haveBaseline_ && ema_ - baseline_ >= p_.enterDb))
+        {
+            if (!haveBaseline_) baseline_ = ema_;
+            else if (ema_ < baseline_) baseline_ += BASELINE_FALL * (ema_ - baseline_);
+            else baseline_ += rise_ * (ema_ - baseline_);
+            haveBaseline_ = true;
+        }
         float above = ema_ - baseline_;
 
         if (!inPeak_)
@@ -97,8 +117,11 @@ public:
     }
 
 private:
+    static constexpr float BASELINE_FALL = 0.2f;
     DetectorParams p_;
+    float rise_ = 0;
     float baseline_ = 0;
+    bool haveBaseline_ = false;
     float ema_ = 0;
     bool haveEma_ = false;
     bool inPeak_ = false;
