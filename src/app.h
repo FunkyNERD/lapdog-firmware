@@ -33,6 +33,10 @@ void setRssiStream(bool on);
 // too, like "rssi on" (without the USB stream). signalDb() is the smoothed
 // level above the in-room baseline, updated every sample while the SDR runs.
 void setLiveSignal(bool on);
+
+// Saves the settings from the timing loop. Writing flash pauses the flash/PSRAM
+// cache, so it can't be done from a task whose stack is in PSRAM (the touch UI's).
+void requestSave();
 float signalDb();
 
 } // namespace app

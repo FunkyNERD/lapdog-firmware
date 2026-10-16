@@ -273,7 +273,8 @@ static void header(lv_obj_t *s, const char *icon, const char *title, Screen back
     lv_obj_set_pos(h, icon ? 96 : 56, 14);
 }
 
-static void save() { settings::save(); }
+// The UI's task has its stack in PSRAM, so the timing loop does the flash write.
+static void save() { app::requestSave(); }
 
 // --- Steppers and switches -------------------------------------------------------------
 
@@ -960,7 +961,7 @@ static Toggle msgToggles[4] = {
     {nullptr, getMsgLaps, setMsgLaps},
 };
 static int getNextHeat() { return settings::nextHeat(); }
-static void setNextHeat(int v) { settings::setNextHeat((uint16_t)v); }
+static void setNextHeat(int v) { settings::setNextHeatUnsaved((uint16_t)v); }
 static void fmtHeat(int v, char *out, size_t len) { snprintf(out, len, "%d", v); }
 static Stepper heatStep = {nullptr, getNextHeat, setNextHeat, 1, 1, 9999, fmtHeat};
 static lv_obj_t *eventValue;

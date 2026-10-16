@@ -19,5 +19,6 @@ void resetDefaults();
 // the timer advances it itself on every arm, without a "save".
 uint16_t nextHeat();
 void setNextHeat(uint16_t heat); // persisted immediately
+void setNextHeatUnsaved(uint16_t heat); // persisted by the next save()
 
 } // namespace settings

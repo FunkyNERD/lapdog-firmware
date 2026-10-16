@@ -44,7 +44,8 @@ struct Cmd
 static QueueHandle_t cmds;
 static volatile bool simRequested = false;
 static volatile bool rssiStream = false;
-static volatile bool liveWanted = false;  // the touch screen's live signal
+static volatile bool liveWanted = false;
+static volatile bool saveWanted = false;  // the touch screen's live signal
 static volatile float liveDb = 0;         // smoothed level above the baseline
 static volatile race::Stage currentStage = race::IDLE;
 static volatile uint16_t currentHeat = 0;
@@ -74,6 +75,7 @@ uint16_t app::sessionHeat() { return currentHeat; }
 void app::simulatePass() { simRequested = true; }
 void app::setRssiStream(bool on) { rssiStream = on; }
 void app::setLiveSignal(bool on) { liveWanted = on; }
+void app::requestSave() { saveWanted = true; }
 float app::signalDb() { return liveDb; }
 
 static void send(CmdType t, const app::ArmRequest *r = nullptr)
@@ -223,6 +225,12 @@ extern "C" void app_main()
             }
             else if (!app::armed())
                 sdr::end();
+        }
+
+        if (saveWanted)
+        {
+            saveWanted = false;
+            settings::save();
         }
 
         if (simRequested)

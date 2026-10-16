@@ -13,6 +13,7 @@ static const uint32_t SETTINGS_VERSION = 4; // bump when the struct layout chang
 
 static Settings current;
 static uint16_t heat = 1;
+static bool heatUnsaved = false;
 
 void settings::resetDefaults()
 {
@@ -55,6 +56,7 @@ bool settings::save()
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    if (heatUnsaved && nvs_set_u16(h, "heat", heat) == ESP_OK) heatUnsaved = false;
     bool ok = nvs_set_u32(h, "ver", SETTINGS_VERSION) == ESP_OK &&
               nvs_set_blob(h, "cfg", &current, sizeof(current)) == ESP_OK && nvs_commit(h) == ESP_OK;
     nvs_close(h);
@@ -62,6 +64,12 @@ bool settings::save()
 }
 
 uint16_t settings::nextHeat() { return heat; }
+
+void settings::setNextHeatUnsaved(uint16_t next)
+{
+    heat = next ? next : 1;
+    heatUnsaved = true;
+}
 
 void settings::setNextHeat(uint16_t next)
 {
