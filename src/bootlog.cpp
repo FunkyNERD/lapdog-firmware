@@ -6,6 +6,7 @@
 #include "esp_attr.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 
 // Kept in RTC memory, which survives a reset (though not a power cut): when
 // plugging USB in resets a board that stalled on battery, the stalled boot's
@@ -39,11 +40,16 @@ static void start()
 void bootlog::mark(const char *step)
 {
     if (!started) start();
+    // Marked from app_main and from LVGL's task (the first frame, the splash).
+    static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+    uint32_t ms = (uint32_t)(esp_timer_get_time() / 1000);
+    taskENTER_CRITICAL(&lock);
     if (current.count < MAX_STEPS)
     {
         current.names[current.count] = step;
-        current.ms[current.count++] = (uint32_t)(esp_timer_get_time() / 1000);
+        current.ms[current.count++] = ms;
     }
+    taskEXIT_CRITICAL(&lock);
 }
 
 static void printRecord(const char *which, const Record &r)

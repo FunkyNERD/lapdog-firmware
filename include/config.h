@@ -30,6 +30,12 @@ constexpr gpio_num_t PIN_LED = GPIO_NUM_NC;
 constexpr bool LED_ACTIVE_LOW = false;
 constexpr gpio_num_t PIN_OLED_SDA = GPIO_NUM_5;
 constexpr gpio_num_t PIN_OLED_SCL = GPIO_NUM_6;
+#elif LAPDOG_TOUCH
+// Waveshare ESP32-C5-Touch-LCD-3.5 (env:c5_touch). No plain LED: the screen shows
+// the state, and GPIO 27 is its I2C data line (touch, IO expander).
+constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_28;
+constexpr gpio_num_t PIN_LED = GPIO_NUM_NC;
+constexpr bool LED_ACTIVE_LOW = false;
 #else
 // Mini ESP32-C5 dev board - the real timer.
 constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_28;

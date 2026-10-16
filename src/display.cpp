@@ -10,6 +10,9 @@
 
 void display::begin() {}
 void display::frame(const lapframe::Frame &) {}
+void display::splash() {}
+void display::bootStep(const char *) {}
+void display::bootDone() {}
 
 #else
 
@@ -305,5 +308,9 @@ void display::begin()
     }
     xTaskCreate(task, "oled", 3072, nullptr, 1, nullptr);
 }
+
+void display::splash() {}
+void display::bootStep(const char *) {}
+void display::bootDone() {}
 
 #endif

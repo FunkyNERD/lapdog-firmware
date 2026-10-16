@@ -47,6 +47,7 @@ static constexpr uint32_t PANEL_POWER_MS = 100; // panel supply settling, in res
 static constexpr uint32_t PANEL_RESET_MS = 150; // after reset release, before the first command
 static esp_io_expander_handle_t expander = nullptr;
 static esp_lcd_panel_handle_t panelHandle = nullptr;
+static void (*firstFrameCb)() = nullptr;
 
 static i2c_master_bus_handle_t i2cBus()
 {
@@ -106,8 +107,9 @@ void board::backlight(int percent)
 bool board::lock(uint32_t timeoutMs) { return lvgl_port_lock(timeoutMs); }
 void board::unlock() { lvgl_port_unlock(); }
 
-lv_display_t *board::begin()
+lv_display_t *board::begin(void (*firstFrame)())
 {
+    firstFrameCb = firstFrame;
     bool expanderOk = expanderInit();
     bootlog::mark("expander");
     if (!expanderOk)
@@ -157,6 +159,9 @@ lv_display_t *board::begin()
     portCfg.task_stack_caps = MALLOC_CAP_SPIRAM; // internal RAM is short: the SDR bank takes 128 KB
     ESP_ERROR_CHECK(lvgl_port_init(&portCfg));
     bootlog::mark("lvgl");
+    // Held until the caller has its first screen up: LVGL's task would otherwise
+    // draw the empty default screen first. (The port's lock is recursive.)
+    lvgl_port_lock(0);
 
     lvgl_port_display_cfg_t dispCfg = {};
     dispCfg.io_handle = io;
@@ -175,9 +180,13 @@ lv_display_t *board::begin()
     dispCfg.flags.buff_spiram = false;
     dispCfg.flags.swap_bytes = true;
     lv_display_t *disp = lvgl_port_add_disp(&dispCfg);
-    if (!disp) return nullptr;
+    if (!disp)
+    {
+        lvgl_port_unlock();
+        return nullptr;
+    }
     bootlog::mark("lvgl_disp");
-    // First whole frame in: switch the display and backlight on.
+    // First whole frame in: switch the display on (still dark) and hand over.
     lv_display_add_event_cb(
         disp,
         [](lv_event_t *e) {
@@ -185,8 +194,9 @@ lv_display_t *board::begin()
             if (on || !lv_display_flush_is_last((lv_display_t *)lv_event_get_user_data(e))) return;
             on = true;
             esp_lcd_panel_disp_on_off(panelHandle, true);
-            board::backlight(100);
             bootlog::mark("first_frame");
+            if (firstFrameCb) firstFrameCb();
+            else board::backlight(100);
         },
         LV_EVENT_FLUSH_FINISH, disp);
 

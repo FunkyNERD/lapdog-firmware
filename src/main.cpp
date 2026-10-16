@@ -170,14 +170,17 @@ static app::ArmRequest buttonArm()
 extern "C" void app_main()
 {
     ESP_LOGI(TAG, "%s", "LapDog timer v" FIRMWARE_VERSION);
-    // The timing loop outranks everything but the radio stacks: on the single-core
-    // C5 the touch screen's drawing (priority 3) would otherwise starve it while a
-    // heat runs. It sleeps SAMPLE_PERIOD_MS each pass, so the screen still gets time.
-    vTaskPrioritySet(nullptr, cfg::TIMING_TASK_PRIORITY);
-    cmds = xQueueCreate(4, sizeof(Cmd));
     bootlog::mark("app_main");
+    // The touch board's splash goes up first and shows each step below; it paces
+    // and animates itself, so nothing here waits on it.
+    display::splash();
+    cmds = xQueueCreate(4, sizeof(Cmd));
+
+    display::bootStep("LOADING SETTINGS");
     settings::begin();
     bootlog::mark("settings");
+
+    display::bootStep("PREPARING SCREENS");
     led::begin();
     display::begin();
     bootlog::mark("display");
@@ -185,11 +188,24 @@ extern "C" void app_main()
     console::begin();
     bootlog::mark("console");
 
+    display::bootStep("STARTING RADIO");
     uint8_t uid[6];
     vrxc::uidFromBindPhrase(settings::get().bindPhrase, uid);
     outputs::setLinks(settings::get().links, uid);
     bootlog::mark("radio");
     ESP_LOGI(TAG, "UID %02x:%02x:%02x:%02x:%02x:%02x", uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
+
+    // Measure the receiver's DC offset at the saved channel now (Wi-Fi is up, so
+    // the PHY is powered), so the first arm doesn't pause for it.
+    display::bootStep("CALIBRATING RECEIVER");
+    if (sdr::available())
+    {
+        sdr::begin(settings::get().freqMhz);
+        sdr::bandPowerDb(millis());
+        sdr::end();
+    }
+    bootlog::mark("calibrated");
+    display::bootDone();
 
     Detector det(timer_settings::detectorParams(settings::get()));
     led::set(led::IDLE);
@@ -199,6 +215,11 @@ extern "C" void app_main()
     uint32_t lastRssi = now;
     bool calibrating = false; // SDR running in idle for "rssi on"
 
+    // The timing loop outranks everything but the radio stacks: on the single-core
+    // C5 the touch screen's drawing (priority 3) would otherwise starve it while a
+    // heat runs. It sleeps SAMPLE_PERIOD_MS each pass, so the screen still gets time.
+    // (Not before now: during start-up the splash's animation goes first.)
+    vTaskPrioritySet(nullptr, cfg::TIMING_TASK_PRIORITY);
     bootlog::mark("running");
     while (true)
     {

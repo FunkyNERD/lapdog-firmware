@@ -13,8 +13,12 @@ constexpr int WIDTH = 480;
 constexpr int HEIGHT = 320;
 
 // Starts the display, touch and LVGL's task. Returns the LVGL display, or
-// nullptr if the panel didn't come up.
-lv_display_t *begin();
+// nullptr if the panel didn't come up. On success it returns holding the LVGL
+// lock, so the caller loads its first screen before anything is drawn: unlock()
+// after. The panel is switched on once that first frame is in, with the
+// backlight still dark; firstFrame (from LVGL's task) is then the caller's cue
+// to bring the backlight up.
+lv_display_t *begin(void (*firstFrame)());
 
 // Backlight, 0-100 %.
 void backlight(int percent);

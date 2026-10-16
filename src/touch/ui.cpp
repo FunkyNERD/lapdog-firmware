@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "art.h"
 #include "board.h"
 #include "channels.h"
 #include "config.h"
@@ -23,19 +24,11 @@
 #include "freertos/FreeRTOS.h"
 #include "race.h"
 #include "settings.h"
+#include "splash.h"
+#include "theme.h"
 
 static const char *TAG = "ui";
 static constexpr uint32_t UI_TICK_MS = 50;
-
-// --- Palette (the app's HUD colours) -----------------------------------------------------
-namespace col
-{
-constexpr uint32_t BG = 0x0A0C0F, SURFACE = 0x14171C, LINE = 0x262B33, DIVIDER = 0x1B1F26;
-constexpr uint32_t TEXT = 0xF3F5F7, SOFT = 0xC9CFD6, MUTED = 0xA0A8B3, CHEVRON = 0x6B7480;
-constexpr uint32_t ACCENT = 0x3D9BE9, ON_ACCENT = 0x06121F, SELECTED = 0x0E1C2A, SELECTED_TEXT = 0x8CC4F5;
-constexpr uint32_t ACCENT_RING = 0x0F2A40, BEST = 0xC4A1FF, BEST_TINT = 0x1C1729, BEST_EDGE = 0x2C2342;
-constexpr uint32_t OK = 0x3DD68C, OK_TINT = 0x0F2A1E, OFF = 0x4A525E;
-} // namespace col
 
 static uint32_t millis() { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -404,10 +397,9 @@ static void chip(lv_obj_t *s, lv_obj_t **label, int x, int w)
 static void buildIdle()
 {
     lv_obj_t *s = screens[S_IDLE] = screen();
-    lv_obj_t *lap = text(s, &lv_font_montserrat_24, col::TEXT, "LAP");
-    lv_obj_set_pos(lap, 16, 13);
-    lv_obj_t *dog = text(s, &lv_font_montserrat_24, col::ACCENT, "DOG");
-    lv_obj_align_to(dog, lap, LV_ALIGN_OUT_RIGHT_MID, 1, 0);
+    lv_obj_t *logo = lv_image_create(s);
+    lv_image_set_src(logo, &art::lockup);
+    lv_obj_set_pos(logo, 16, 12); // level with the chips
     chip(s, &idle.chan, 248, 110);
     chip(s, &idle.radio, 364, 60);
     lv_obj_t *gear = button(s, 428, 4, 48, 48, col::BG, 0, 24, goTo, (void *)(intptr_t)S_SETTINGS);
@@ -1188,6 +1180,7 @@ static void show(Screen s)
 
 static void tick(lv_timer_t *)
 {
+    if (splash::active()) return; // it loads the first screen itself
     bool armed = app::armed();
     if (armed && current != S_LIVE) show(S_LIVE);
     else if (!armed && current == S_LIVE) show(S_IDLE);
@@ -1204,29 +1197,25 @@ static void tick(lv_timer_t *)
     }
 }
 
+// The first screen, at the splash's hand-over (live if a heat was armed meanwhile).
+static void enter() { show(app::armed() ? S_LIVE : S_IDLE); }
+
 void display::begin()
 {
-    lv_display_t *disp = board::begin();
-    if (!disp)
+    if (!lv_display_get_default()) return; // no panel: display::splash() said so
+    // One screen at a time, letting go of LVGL in between: building them all takes
+    // ~0.4 s, and the splash keeps barking meanwhile.
+    void (*const builders[])() = {buildIdle,  buildLive,  buildSettings, buildChannel, buildSensitivity,
+                                  buildFalseReads, buildRadio, buildMessages, buildRace, buildKeyboard};
+    for (auto build : builders)
     {
-        ESP_LOGE(TAG, "no display");
-        return;
+        board::lock();
+        build();
+        board::unlock();
     }
     board::lock();
-    lv_theme_t *theme = lv_theme_default_init(disp, lv_color_hex(col::ACCENT), lv_color_hex(col::OK), true,
-                                              &lv_font_montserrat_16);
-    lv_display_set_theme(disp, theme);
-    buildIdle();
-    buildLive();
-    buildSettings();
-    buildChannel();
-    buildSensitivity();
-    buildFalseReads();
-    buildRadio();
-    buildMessages();
-    buildRace();
-    buildKeyboard();
-    show(S_IDLE);
+    if (splash::active()) splash::onFinished(enter);
+    else enter();
     lv_timer_create(tick, UI_TICK_MS, nullptr);
     board::unlock();
     ESP_LOGI(TAG, "touch screens up");
