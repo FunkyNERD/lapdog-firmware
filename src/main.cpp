@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include "app.h"
+#include "bootlog.h"
 #include "button.h"
 #include "config.h"
 #include "console.h"
@@ -174,15 +175,20 @@ extern "C" void app_main()
     // heat runs. It sleeps SAMPLE_PERIOD_MS each pass, so the screen still gets time.
     vTaskPrioritySet(nullptr, cfg::TIMING_TASK_PRIORITY);
     cmds = xQueueCreate(4, sizeof(Cmd));
+    bootlog::mark("app_main");
     settings::begin();
+    bootlog::mark("settings");
     led::begin();
     display::begin();
+    bootlog::mark("display");
     button::begin();
     console::begin();
+    bootlog::mark("console");
 
     uint8_t uid[6];
     vrxc::uidFromBindPhrase(settings::get().bindPhrase, uid);
     outputs::setLinks(settings::get().links, uid);
+    bootlog::mark("radio");
     ESP_LOGI(TAG, "UID %02x:%02x:%02x:%02x:%02x:%02x", uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
 
     Detector det(timer_settings::detectorParams(settings::get()));
@@ -193,6 +199,7 @@ extern "C" void app_main()
     uint32_t lastRssi = now;
     bool calibrating = false; // SDR running in idle for "rssi on"
 
+    bootlog::mark("running");
     while (true)
     {
         now = millis();

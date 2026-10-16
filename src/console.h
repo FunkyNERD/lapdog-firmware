@@ -23,6 +23,8 @@
 //   restart                  armed: run this heat again
 //   rssi on|off              stream "R:<dB above baseline>" for calibration (idle too)
 //   sim                      inject a synthetic gate pass (works armed too)
+//   boot                     start-up step timestamps and reset reason, for this boot and
+//                            the one before (kept across a reset): S:boot.this|last.<step>=<ms> (+<ms>)
 //   sdr                      receiver state: S:sdr=on|off|none, sdr.gain, sdr.gainmax,
 //                            sdr.bw, sdr.level (dB above baseline), sdr.dbfs (last
 //                            snapshot, dB full scale), sdr.errors

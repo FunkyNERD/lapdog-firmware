@@ -69,6 +69,8 @@ The capture needs the PHY's RF test library and debug hooks (`sdkconfig.defaults
 
 Internal RAM is the tight spot: the capture bank takes 128 KB of the C5's 320 KB. So Wi-Fi gets few buffers (it only sends ESP-NOW), and on the touch board LVGL allocates from PSRAM (`lv_mem_psram.c`) and draws through two small internal DMA buffers. The timing loop runs at priority 6, above the screen's drawing, so a busy screen can't slow the sampling on the single-core C5.
 
+`boot` on the console prints when each start-up step finished, for this boot and the one before (kept across a reset, so a board that misbehaves on battery can be read after plugging USB in, which resets it).
+
 Bring-up from the console: `sdr` prints the receiver state (gain, level, last snapshot in dBFS, errors, and captures and time per capture since the last `sdr`), `sdr dump` prints the next snapshot's first raw words, `sdr gain <index|auto>` and `sdr bw <MHz|0>` change the gain and analog bandwidth until the next reboot, and `rssi on` streams the level.
 
 ### Flash layout

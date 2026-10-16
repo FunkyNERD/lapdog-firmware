@@ -2,6 +2,8 @@
 
 #include "board.h"
 
+#include "bootlog.h"
+
 #include "custom_io_expander_ch32v003.h"
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
@@ -41,7 +43,10 @@ static constexpr bool TOUCH_MIRROR_X = true;
 static constexpr bool TOUCH_MIRROR_Y = false;
 
 // IO expander pins: P0 touch reset, P1 LCD reset, P5 power to the panel.
+static constexpr uint32_t PANEL_POWER_MS = 100; // panel supply settling, in reset
+static constexpr uint32_t PANEL_RESET_MS = 150; // after reset release, before the first command
 static esp_io_expander_handle_t expander = nullptr;
+static esp_lcd_panel_handle_t panelHandle = nullptr;
 
 static i2c_master_bus_handle_t i2cBus()
 {
@@ -61,17 +66,32 @@ static i2c_master_bus_handle_t i2cBus()
 static bool expanderInit()
 {
     i2c_master_bus_handle_t bus = i2cBus();
-    if (!bus || custom_io_expander_new_i2c_ch32v003(bus, CUSTOM_IO_EXPANDER_I2C_CH32V003_ADDRESS, &expander) != ESP_OK)
-        return false;
-    // Reset pulse on the LCD and touch, then power on - Waveshare's sequence.
-    esp_io_expander_set_dir(expander, IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1 | IO_EXPANDER_PIN_NUM_5,
-                            IO_EXPANDER_OUTPUT);
-    esp_io_expander_set_dir(expander, IO_EXPANDER_PIN_NUM_6, IO_EXPANDER_INPUT);
-    esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1, 1);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    if (!bus) return false;
+    // The expander is a small MCU (CH32V003) that boots alongside us: on a cold
+    // power-on it may not answer yet, so give it up to a second.
+    for (int tries = 0; tries < 20; tries++)
+    {
+        if (!expander && custom_io_expander_new_i2c_ch32v003(bus, CUSTOM_IO_EXPANDER_I2C_CH32V003_ADDRESS, &expander) != ESP_OK)
+            expander = nullptr;
+        if (expander &&
+            esp_io_expander_set_dir(expander, IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1 | IO_EXPANDER_PIN_NUM_5,
+                                    IO_EXPANDER_OUTPUT) == ESP_OK &&
+            esp_io_expander_set_dir(expander, IO_EXPANDER_PIN_NUM_6, IO_EXPANDER_INPUT) == ESP_OK)
+            break;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (!expander) return false;
+    // Panel power first, with the LCD and touch held in reset; then let them out
+    // of reset once the supply has settled. On a cold start the panel is
+    // unpowered until here - powering it and releasing reset in one go (as after
+    // a warm reset, when the expander has kept it powered) left the ST7796
+    // ignoring its init and showing noise.
+    custom_io_expander_set_pwm(expander, 0); // backlight off until there's a picture
     esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1, 0);
-    vTaskDelay(pdMS_TO_TICKS(50));
-    esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1 | IO_EXPANDER_PIN_NUM_5, 1);
+    esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_5, 1);
+    vTaskDelay(pdMS_TO_TICKS(PANEL_POWER_MS));
+    esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1, 1);
+    vTaskDelay(pdMS_TO_TICKS(PANEL_RESET_MS)); // the ST7796 wants 120 ms after reset
     return true;
 }
 
@@ -88,7 +108,9 @@ void board::unlock() { lvgl_port_unlock(); }
 
 lv_display_t *board::begin()
 {
-    if (!expanderInit())
+    bool expanderOk = expanderInit();
+    bootlog::mark("expander");
+    if (!expanderOk)
     {
         ESP_LOGE(TAG, "IO expander not found");
         return nullptr;
@@ -120,16 +142,21 @@ lv_display_t *board::begin()
     panelCfg.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
     panelCfg.bits_per_pixel = 16;
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7796(io, &panelCfg, &panel));
+    bootlog::mark("lcd_io");
     esp_lcd_panel_reset(panel);
     esp_lcd_panel_init(panel);
     esp_lcd_panel_invert_color(panel, true);
-    esp_lcd_panel_disp_on_off(panel, true);
+    // The display stays off (and the backlight dark) until LVGL's first frame is
+    // in: at power-up the panel's memory is random, and showing it is static.
+    panelHandle = panel;
+    bootlog::mark("lcd_init");
 
     lvgl_port_cfg_t portCfg = ESP_LVGL_PORT_INIT_CONFIG();
     portCfg.task_priority = 3; // under the timing loop: drawing never delays a pass
     portCfg.task_stack = 8192;
     portCfg.task_stack_caps = MALLOC_CAP_SPIRAM; // internal RAM is short: the SDR bank takes 128 KB
     ESP_ERROR_CHECK(lvgl_port_init(&portCfg));
+    bootlog::mark("lvgl");
 
     lvgl_port_display_cfg_t dispCfg = {};
     dispCfg.io_handle = io;
@@ -149,6 +176,19 @@ lv_display_t *board::begin()
     dispCfg.flags.swap_bytes = true;
     lv_display_t *disp = lvgl_port_add_disp(&dispCfg);
     if (!disp) return nullptr;
+    bootlog::mark("lvgl_disp");
+    // First whole frame in: switch the display and backlight on.
+    lv_display_add_event_cb(
+        disp,
+        [](lv_event_t *e) {
+            static bool on = false;
+            if (on || !lv_display_flush_is_last((lv_display_t *)lv_event_get_user_data(e))) return;
+            on = true;
+            esp_lcd_panel_disp_on_off(panelHandle, true);
+            board::backlight(100);
+            bootlog::mark("first_frame");
+        },
+        LV_EVENT_FLUSH_FINISH, disp);
 
     esp_lcd_panel_io_handle_t touchIo = nullptr;
     esp_lcd_panel_io_i2c_config_t touchIoCfg = ESP_LCD_TOUCH_IO_I2C_FT6336_CONFIG();
@@ -175,7 +215,7 @@ lv_display_t *board::begin()
     else
         ESP_LOGE(TAG, "touch panel not found");
 
-    backlight(100);
+    bootlog::mark("touch");
     return disp;
 }
 

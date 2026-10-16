@@ -36,3 +36,6 @@ CONFIG_LV_USE_DEMO_WIDGETS=n
 # CONFIG_SPI_MASTER_ISR_IN_IRAM is not set
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_touch.csv"
+
+# Skip the 8 MB PSRAM self-test at boot (about a second).
+# CONFIG_SPIRAM_MEMTEST is not set

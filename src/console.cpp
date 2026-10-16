@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "bootlog.h"
 #include "config.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
@@ -112,6 +113,7 @@ static void handleLine(char *line)
     bool ok = true;
     if (!strcmp(cmd, "get")) printSettings();
     else if (!strcmp(cmd, "sim")) app::simulatePass();
+    else if (!strcmp(cmd, "boot")) bootlog::print();
     else if (!strcmp(cmd, "rssi"))
     {
         char *v = strtok(nullptr, " ");
@@ -160,7 +162,15 @@ static void task(void *)
     char line[160];
     while (true)
     {
-        if (!fgets(line, sizeof(line), stdin)) continue;
+        // With no computer on the USB port (e.g. a cold start on battery), reading
+        // stdin can fail at once instead of waiting. Retrying straight away spun
+        // this task and starved everything below it, the touch screen included.
+        if (!fgets(line, sizeof(line), stdin))
+        {
+            clearerr(stdin);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         line[strcspn(line, "\r\n")] = '\0';
         handleLine(line);
     }
