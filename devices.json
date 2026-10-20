@@ -8,7 +8,7 @@
         "description": "The LapDog timer: listens on your 5.8 GHz video channel.",
         "instructions": [
             "Plug the board into this computer with a USB-C data cable. It shows up as a USB JTAG/serial port, no driver needed.",
-            "If it isn't found, hold BOOT while you plug it in (or press RESET while holding BOOT), then let go and try again."
+            "Hold BOOT while you plug it in (or press RESET while holding BOOT), then let go. This puts the board in install mode. The browser flasher can't do that by itself on newer ESP32-C5 chips yet, so without it the board just restarts over and over and the install fails to start."
         ]
     },
     {
@@ -20,7 +20,7 @@
         "description": "The LapDog timer with a 480x320 touchscreen: arm it, watch your laps and change every setting without a phone. Fit a 5.8 GHz antenna to the U.FL connector.",
         "instructions": [
             "Plug the board into this computer with a USB-C data cable. It shows up as a USB JTAG/serial port, no driver needed.",
-            "If it isn't found, hold BOOT while you plug it in (or press RESET while holding BOOT), then let go and try again."
+            "Hold BOOT while you plug it in (or press RESET while holding BOOT), then let go. This puts the board in install mode. The browser flasher can't do that by itself on newer ESP32-C5 chips yet, so without it the board just restarts over and over and the install fails to start."
         ]
     },
     {
