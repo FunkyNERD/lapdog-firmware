@@ -9,6 +9,7 @@
 #include "app.h"
 #include "bootlog.h"
 #include "button.h"
+#include "cloud.h"
 #include "config.h"
 #include "console.h"
 #include "detector.h"
@@ -59,6 +60,7 @@ public:
     void frame(const lapframe::Frame &f) override
     {
         display::frame(f);
+        cloud::frame(f); // finished heats to the SD card, for website sync
         outputs::sink().frame(f);
     }
     void osd(uint8_t row, const char *text) override { outputs::sink().osd(row, text); }
@@ -123,6 +125,7 @@ static void arm(const app::ArmRequest &r, uint16_t heat, Detector &det)
     det.trackBaseline(cfg::BASELINE_RISE);
     idleBeatsUntil = 0;
     sdr::begin(s.freqMhz);
+    cloud::armContext(setup.event, setup.heatPrefix);
     session.arm(setup, timer_settings::holdMs(s, esp_random()));
     currentHeat = heat;
     currentStage = session.stage();
@@ -142,7 +145,9 @@ static void handle(const Cmd &c, Detector &det)
     switch (c.type)
     {
     case CMD_ARM:
-        if (!app::armed()) armNewHeat(c.arm, det);
+        // Website sync has the radio: the screen says so, and the heat waits.
+        if (cloud::busy()) ESP_LOGW(TAG, "not arming: website sync has the radio");
+        else if (!app::armed()) armNewHeat(c.arm, det);
         break;
     case CMD_DISARM:
         if (app::armed()) disarm();
@@ -193,6 +198,7 @@ extern "C" void app_main()
     vrxc::uidFromBindPhrase(settings::get().bindPhrase, uid);
     outputs::setLinks(settings::get().links, uid);
     bootlog::mark("radio");
+    cloud::begin();
     ESP_LOGI(TAG, "UID %02x:%02x:%02x:%02x:%02x:%02x", uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
 
     // Measure the receiver's DC offset at the saved channel now (Wi-Fi is up, so
@@ -232,7 +238,7 @@ extern "C" void app_main()
         {
         case button::LONG_PRESS:
             if (app::armed()) disarm();
-            else armNewHeat(buttonArm(), det);
+            else if (!cloud::busy()) armNewHeat(buttonArm(), det);
             break;
         case button::SHORT_PRESS:
             if (app::armed()) handle({CMD_NEW_HEAT, {}}, det);
@@ -241,7 +247,7 @@ extern "C" void app_main()
         }
 
         // Live signal for calibration works idle too: the radio is free then.
-        bool wantIdleSdr = !app::armed() && (rssiStream || liveWanted);
+        bool wantIdleSdr = !app::armed() && (rssiStream || liveWanted) && !cloud::busy();
         if (wantIdleSdr != calibrating)
         {
             calibrating = wantIdleSdr;
@@ -260,6 +266,7 @@ extern "C" void app_main()
             saveWanted = false;
             settings::save();
         }
+        cloud::tick(); // website sync's NVS writes (its task's stack is in PSRAM)
 
         if (simRequested)
         {

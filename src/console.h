@@ -25,6 +25,10 @@
 //   sim                      inject a synthetic gate pass (works armed too)
 //   boot                     start-up step timestamps and reset reason, for this boot and
 //                            the one before (kept across a reset): S:boot.this|last.<step>=<ms> (+<ms>)
+//   sd                       touch timer: the microSD card for website sync (mounts it if
+//                            it isn't yet): S:sd=<card>|none, sd.mb, sd.waiting, sd.sent, sd.next
+//   net                      touch timer: join a saved Wi-Fi network and fetch the website over
+//                            HTTPS, to check website sync can reach it (the result is logged)
 //   sdr                      receiver state: S:sdr=on|off|none, sdr.gain, sdr.gainmax,
 //                            sdr.bw, sdr.level (dB above baseline), sdr.dbfs (last
 //                            snapshot, dB full scale), sdr.errors

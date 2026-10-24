@@ -1,6 +1,7 @@
 // The touch timer's screens (Waveshare ESP32-C5-Touch-LCD-3.5, 480x320), after
 // the "LapDog Touch Timer" design: idle (arm), live timing, a settings grid
-// and one page per category. Everything the pilot changes here is a timer
+// and one page per category, plus website sync (cloud.h): Wi-Fi, pairing and
+// the Sync button. Everything the pilot changes here is a timer
 // setting, saved to NVS straight away - the same settings the app and the USB
 // console change. Settings are only reachable while idle; arming (from here,
 // the BOOT button or USB) always brings up the live screen.
@@ -17,6 +18,7 @@
 #include "art.h"
 #include "board.h"
 #include "channels.h"
+#include "cloud.h"
 #include "config.h"
 #include "display.h"
 #include "esp_log.h"
@@ -240,6 +242,10 @@ enum Screen
     S_MESSAGES,
     S_RACE,
     S_KEYBOARD,
+    S_SYNC,
+    S_WIFI,
+    S_WIFI_KEYS,
+    S_PAIR,
     S_COUNT
 };
 
@@ -471,7 +477,7 @@ static void refreshIdle()
         fmtMinutes(s.raceTimeS, t, sizeof(t));
         lv_label_set_text_fmt(idle.raceLabel, "Race - %s", t);
     }
-    lv_label_set_text(idle.armHint, race ? "stage, then GO" : "first pass starts lap 1");
+    lv_label_set_text(idle.armHint, cloud::busy() ? "website sync has the radio" : race ? "stage, then GO" : "first pass starts lap 1");
 
     Model m = snapshot();
     char b[16];
@@ -626,9 +632,11 @@ static void refreshLive()
 
 // --- Settings grid ------------------------------------------------------------------------
 
+static constexpr int TILES = 7;
+
 static struct
 {
-    lv_obj_t *value[6];
+    lv_obj_t *value[TILES];
 } grid;
 
 static void buildSettings()
@@ -646,19 +654,24 @@ static void buildSettings()
         {LV_SYMBOL_WIFI, "Channel", S_CHANNEL},           {LV_SYMBOL_EYE_OPEN, "Sensitivity", S_SENSITIVITY},
         {LV_SYMBOL_WARNING, "False reads", S_FALSE_READS}, {LV_SYMBOL_BLUETOOTH, "Radio output", S_RADIO},
         {LV_SYMBOL_EDIT, "Race messages", S_MESSAGES},    {LV_SYMBOL_LOOP, "Race defaults", S_RACE},
+        {LV_SYMBOL_UPLOAD, "Website sync", S_SYNC},
     };
-    for (int i = 0; i < 6; i++)
+    // Three rows of three: icon and title on top, what it's set to below.
+    for (int i = 0; i < TILES; i++)
     {
-        int x = 16 + (i % 3) * 152, y = 60 + (i / 3) * 128;
-        lv_obj_t *t = button(s, x, y, 144, 120, col::SURFACE, col::LINE, 16, goTo, (void *)(intptr_t)tiles[i].to);
-        lv_obj_t *ic = panel(t, 12, 12, 36, 36, col::SELECTED, 0, 10);
+        int x = 16 + (i % 3) * 152, y = 60 + (i / 3) * 86;
+        lv_obj_t *t = button(s, x, y, 144, 78, col::SURFACE, col::LINE, 14, goTo, (void *)(intptr_t)tiles[i].to);
+        lv_obj_t *ic = panel(t, 10, 10, 30, 30, col::SELECTED, 0, 9);
         lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_center(text(ic, &lv_font_montserrat_20, col::ACCENT, tiles[i].icon));
-        lv_obj_set_pos(text(t, &lv_font_montserrat_16, col::TEXT, tiles[i].title), 12, 70);
+        lv_obj_center(text(ic, &lv_font_montserrat_16, col::ACCENT, tiles[i].icon));
+        lv_obj_t *title = text(t, &lv_font_montserrat_14, col::TEXT, tiles[i].title);
+        lv_obj_set_pos(title, 48, 16);
+        lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(title, 90);
         grid.value[i] = text(t, &lv_font_montserrat_12, col::SELECTED_TEXT, "");
-        lv_obj_set_pos(grid.value[i], 12, 92);
+        lv_obj_set_pos(grid.value[i], 10, 52);
         lv_label_set_long_mode(grid.value[i], LV_LABEL_LONG_DOT);
-        lv_obj_set_width(grid.value[i], 122);
+        lv_obj_set_width(grid.value[i], 124);
     }
 }
 
@@ -687,6 +700,11 @@ static void refreshSettings()
     fmtMinutes(s.raceTimeS, t, sizeof(t));
     if (s.raceLimit == race::LIMIT_LAPS) lv_label_set_text_fmt(grid.value[5], "%u laps - %s", s.raceLaps, t);
     else lv_label_set_text_fmt(grid.value[5], "%s race - %u laps", t, s.raceLaps);
+    int waiting = cloud::pending();
+    if (!cloud::paired()) lv_label_set_text(grid.value[6], "Not paired");
+    else if (!cloud::sdReady()) lv_label_set_text(grid.value[6], "No SD card");
+    else if (waiting > 0) lv_label_set_text_fmt(grid.value[6], "%d heat%s waiting", waiting, waiting == 1 ? "" : "s");
+    else lv_label_set_text(grid.value[6], "Up to date");
 }
 
 // --- Channel ------------------------------------------------------------------------------
@@ -1122,8 +1140,9 @@ static void buildKeyboard()
     lv_obj_align(keys.count, LV_ALIGN_TOP_RIGHT, -26, 74);
 
     keys.kb = lv_keyboard_create(s);
-    lv_obj_set_pos(keys.kb, 0, 110);
+    // LVGL aligns a keyboard to the bottom: a position would be an offset from there.
     lv_obj_set_size(keys.kb, 480, 210);
+    lv_obj_align(keys.kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_textarea(keys.kb, keys.area);
     lv_keyboard_set_mode(keys.kb, LV_KEYBOARD_MODE_TEXT_UPPER);
     lv_obj_set_style_bg_color(keys.kb, lv_color_hex(col::BG), 0);
@@ -1142,6 +1161,375 @@ static void refreshKeyboard()
     keyboardChanged(nullptr);
 }
 
+
+// --- Website sync -------------------------------------------------------------------------
+// Pair once with a code from the website, save a 2.4 GHz network, then SYNC NOW
+// uploads every heat on the SD card that the website doesn't have (cloud.h).
+
+static struct
+{
+    lv_obj_t *title, *detail, *wifiValue, *pair, *pairLabel, *sync, *syncLabel, *message;
+    uint32_t unpairArmedAt; // millis() of the first tap on UNPAIR; a second within 4 s confirms
+} syncPage;
+
+static void syncNow(lv_event_t *)
+{
+    cloud::startSync();
+    refresh(S_SYNC);
+}
+
+static void pairOrUnpair(lv_event_t *)
+{
+    if (!cloud::paired())
+    {
+        show(S_PAIR);
+        return;
+    }
+    if (syncPage.unpairArmedAt && millis() - syncPage.unpairArmedAt < 4000)
+    {
+        syncPage.unpairArmedAt = 0;
+        cloud::startUnpair();
+    }
+    else syncPage.unpairArmedAt = millis();
+    refresh(S_SYNC);
+}
+
+static void buildSync()
+{
+    lv_obj_t *s = screens[S_SYNC] = screen();
+    header(s, LV_SYMBOL_UPLOAD, "Website sync", S_SETTINGS);
+
+    lv_obj_t *card = panel(s, 16, 60, 448, 70, col::SURFACE, col::LINE, 14);
+    syncPage.title = text(card, &lv_font_montserrat_16, col::TEXT, "");
+    lv_obj_set_pos(syncPage.title, 14, 12);
+    lv_label_set_long_mode(syncPage.title, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(syncPage.title, 420);
+    syncPage.detail = text(card, &lv_font_montserrat_12, col::MUTED, "");
+    lv_obj_set_pos(syncPage.detail, 14, 40);
+    lv_label_set_long_mode(syncPage.detail, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(syncPage.detail, 420);
+
+    lv_obj_t *wifi = button(s, 16, 142, 218, 56, col::SURFACE, col::LINE, 14, goTo, (void *)(intptr_t)S_WIFI);
+    lv_obj_set_pos(text(wifi, &lv_font_montserrat_16, col::TEXT, LV_SYMBOL_WIFI "  Wi-Fi"), 14, 8);
+    syncPage.wifiValue = text(wifi, &lv_font_montserrat_12, col::SELECTED_TEXT, "");
+    lv_obj_set_pos(syncPage.wifiValue, 14, 32);
+    lv_label_set_long_mode(syncPage.wifiValue, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(syncPage.wifiValue, 190);
+
+    syncPage.pair = button(s, 246, 142, 218, 56, col::SURFACE, col::LINE, 14, pairOrUnpair);
+    syncPage.pairLabel = text(syncPage.pair, &lv_font_montserrat_16, col::TEXT, "");
+    lv_obj_center(syncPage.pairLabel);
+
+    syncPage.sync = button(s, 16, 210, 448, 60, col::ACCENT, 0, 16, syncNow);
+    lv_obj_set_style_bg_color(syncPage.sync, lv_color_hex(0x2F7FC2), LV_STATE_PRESSED);
+    syncPage.syncLabel = text(syncPage.sync, &lv_font_montserrat_24, col::ON_ACCENT, "");
+    lv_obj_center(syncPage.syncLabel);
+
+    syncPage.message = text(s, &lv_font_montserrat_12, col::SOFT, "");
+    lv_obj_set_pos(syncPage.message, 16, 282);
+    lv_label_set_long_mode(syncPage.message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(syncPage.message, 448);
+}
+
+static void refreshSync()
+{
+    cloud::Status st = cloud::status();
+    bool paired = cloud::paired();
+    int waiting = cloud::pending();
+    if (paired) lv_label_set_text_fmt(syncPage.title, "Paired as %s", cloud::deviceName());
+    else lv_label_set_text(syncPage.title, "Not paired with the website");
+    if (!cloud::sdReady()) lv_label_set_text(syncPage.detail, "No SD card: finished heats aren't kept for sync");
+    else if (paired)
+    {
+        if (waiting < 0) waiting = 0;
+        const char *pilot = cloud::pilotName();
+        if (pilot[0]) lv_label_set_text_fmt(syncPage.detail, "%s's account - %d heat%s waiting", pilot, waiting, waiting == 1 ? "" : "s");
+        else lv_label_set_text_fmt(syncPage.detail, "%d heat%s waiting", waiting, waiting == 1 ? "" : "s");
+    }
+    else lv_label_set_text(syncPage.detail, "On the website: Devices > Pair a device, then Pair here");
+
+    int nets = cloud::networkCount();
+    if (nets) lv_label_set_text_fmt(syncPage.wifiValue, "%s%s", cloud::network(0).ssid, nets > 1 ? " + more" : "");
+    else lv_label_set_text(syncPage.wifiValue, "No network saved");
+
+    bool confirming = syncPage.unpairArmedAt && millis() - syncPage.unpairArmedAt < 4000;
+    if (!confirming) syncPage.unpairArmedAt = 0;
+    lv_label_set_text(syncPage.pairLabel, !paired ? LV_SYMBOL_PLUS "  Pair" : confirming ? "Tap again to unpair" : "Unpair");
+    lv_obj_set_style_text_color(syncPage.pairLabel, lv_color_hex(confirming ? col::ALERT : col::TEXT), 0);
+
+    bool can = paired && !st.running;
+    lv_obj_set_style_bg_color(syncPage.sync, lv_color_hex(can ? col::ACCENT : col::LINE), 0);
+    lv_obj_set_style_text_color(syncPage.syncLabel, lv_color_hex(can ? col::ON_ACCENT : col::MUTED), 0);
+    if (st.running && st.total) lv_label_set_text_fmt(syncPage.syncLabel, "SYNCING %u/%u", st.done, st.total);
+    else lv_label_set_text(syncPage.syncLabel, st.running ? "WORKING..." : LV_SYMBOL_UPLOAD "  SYNC NOW");
+    lv_label_set_text(syncPage.message, st.message);
+    lv_obj_set_style_text_color(syncPage.message, lv_color_hex(!st.running && st.job != cloud::JOB_NONE && !st.ok ? col::ALERT : col::SOFT), 0);
+}
+
+// --- Wi-Fi networks -----------------------------------------------------------------------
+
+static struct
+{
+    lv_obj_t *saved, *nearby, *scanLabel, *note;
+    int shownScans, shownSaved; // what's on screen: rebuilt only when it changes
+    bool scanned;
+} wifiPage;
+
+static char wifiSsid[33]; // the network the password keyboard is for
+
+static void startScan(lv_event_t *)
+{
+    wifiPage.scanned = true;
+    cloud::startScan();
+    refresh(S_WIFI);
+}
+
+static void forgetNetwork(lv_event_t *e)
+{
+    cloud::removeNetwork((int)(intptr_t)lv_event_get_user_data(e));
+    wifiPage.shownSaved = -1;
+    refresh(S_WIFI);
+}
+
+static void pickNetwork(lv_event_t *e)
+{
+    cloud::ScanResult r = cloud::scanResult((int)(intptr_t)lv_event_get_user_data(e));
+    if (!r.ssid[0]) return;
+    snprintf(wifiSsid, sizeof(wifiSsid), "%s", r.ssid);
+    if (r.open)
+    {
+        if (!cloud::saveNetwork(r.ssid, "")) lv_label_set_text(wifiPage.note, "Five networks saved: forget one first");
+        wifiPage.shownScans = -1;
+        refresh(S_WIFI);
+    }
+    else show(S_WIFI_KEYS);
+}
+
+// One tappable row in a list card.
+static lv_obj_t *listRow(lv_obj_t *list, int i, const char *title, const char *right, lv_event_cb_t cb, void *user)
+{
+    // Before the page has been on screen, LVGL hasn't laid the list out: its width would read 0.
+    lv_obj_update_layout(list);
+    lv_obj_t *row = button(list, 6, 6 + i * 46, lv_obj_get_width(list) - 12, 42, col::SURFACE, 0, 10, cb, user);
+    lv_obj_t *t = text(row, &lv_font_montserrat_14, col::TEXT, title);
+    lv_obj_align(t, LV_ALIGN_LEFT_MID, 10, 0);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(t, lv_obj_get_width(list) - 70);
+    lv_obj_t *r = text(row, &lv_font_montserrat_14, col::MUTED, right);
+    lv_obj_align(r, LV_ALIGN_RIGHT_MID, -10, 0);
+    return row;
+}
+
+static void buildWifi()
+{
+    lv_obj_t *s = screens[S_WIFI] = screen();
+    header(s, LV_SYMBOL_WIFI, "Wi-Fi", S_SYNC);
+    lv_obj_t *scan = button(s, 352, 10, 112, 38, col::ACCENT, 0, 10, startScan);
+    wifiPage.scanLabel = text(scan, &lv_font_montserrat_16, col::ON_ACCENT, LV_SYMBOL_REFRESH " SCAN");
+    lv_obj_center(wifiPage.scanLabel);
+
+    lv_obj_set_pos(text(s, &lv_font_montserrat_12, col::MUTED, "SAVED - tap to forget"), 16, 62);
+    wifiPage.saved = panel(s, 16, 80, 218, 214, col::SURFACE, col::LINE, 14);
+    lv_obj_set_pos(text(s, &lv_font_montserrat_12, col::MUTED, "NEARBY 2.4 GHZ - tap to add"), 246, 62);
+    wifiPage.nearby = panel(s, 246, 80, 218, 214, col::SURFACE, col::LINE, 14);
+    lv_obj_add_flag(wifiPage.nearby, LV_OBJ_FLAG_SCROLLABLE);
+    wifiPage.note = text(s, &lv_font_montserrat_12, col::SOFT, "");
+    lv_obj_set_pos(wifiPage.note, 16, 300);
+    wifiPage.shownScans = wifiPage.shownSaved = -1;
+}
+
+static void refreshWifi()
+{
+    cloud::Status st = cloud::status();
+    bool scanning = st.running && st.job == cloud::JOB_SCAN;
+    lv_label_set_text(wifiPage.scanLabel, scanning ? "..." : LV_SYMBOL_REFRESH " SCAN");
+
+    int nets = cloud::networkCount();
+    if (nets != wifiPage.shownSaved)
+    {
+        wifiPage.shownSaved = nets;
+        lv_obj_clean(wifiPage.saved);
+        for (int i = 0; i < nets; i++)
+            listRow(wifiPage.saved, i, cloud::network(i).ssid, LV_SYMBOL_CLOSE, forgetNetwork, (void *)(intptr_t)i);
+        if (!nets) lv_obj_center(text(wifiPage.saved, &lv_font_montserrat_14, col::MUTED, "None yet"));
+    }
+
+    int n = cloud::scanCount();
+    if (n != wifiPage.shownScans && !scanning)
+    {
+        wifiPage.shownScans = n;
+        lv_obj_clean(wifiPage.nearby);
+        for (int i = 0; i < n; i++)
+        {
+            cloud::ScanResult r = cloud::scanResult(i);
+            listRow(wifiPage.nearby, i, r.ssid, r.open ? "open" : LV_SYMBOL_PLUS, pickNetwork, (void *)(intptr_t)i);
+        }
+        if (!n)
+            lv_obj_center(text(wifiPage.nearby, &lv_font_montserrat_14, col::MUTED, wifiPage.scanned ? "None found" : "Tap SCAN"));
+    }
+    if (scanning || st.job == cloud::JOB_SCAN) lv_label_set_text(wifiPage.note, st.message);
+}
+
+// --- Wi-Fi password keyboard ----------------------------------------------------------------
+
+static struct
+{
+    lv_obj_t *title, *area, *kb;
+} passKeys;
+
+static void styleKeyboard(lv_obj_t *kb)
+{
+    lv_obj_set_style_bg_color(kb, lv_color_hex(col::BG), 0);
+    lv_obj_set_style_bg_color(kb, lv_color_hex(col::SURFACE), LV_PART_ITEMS);
+    lv_obj_set_style_text_color(kb, lv_color_hex(col::TEXT), LV_PART_ITEMS);
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_16, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(kb, lv_color_hex(col::LINE), LV_PART_ITEMS);
+}
+
+static lv_obj_t *keyArea(lv_obj_t *s, int maxLen)
+{
+    lv_obj_t *a = lv_textarea_create(s);
+    lv_obj_set_pos(a, 16, 58);
+    lv_obj_set_size(a, 448, 44);
+    lv_textarea_set_one_line(a, true);
+    lv_textarea_set_max_length(a, maxLen);
+    lv_obj_set_style_text_font(a, &lv_font_montserrat_20, 0);
+    fill(a, col::SURFACE, col::ACCENT, 12);
+    lv_obj_set_style_border_width(a, 2, 0);
+    lv_obj_set_style_text_color(a, lv_color_hex(col::TEXT), 0);
+    return a;
+}
+
+static void passDone(lv_event_t *)
+{
+    bool ok = cloud::saveNetwork(wifiSsid, lv_textarea_get_text(passKeys.area));
+    lv_label_set_text(wifiPage.note, ok ? "Saved: it's tried on the next sync" : "Five networks saved: forget one first");
+    wifiPage.shownScans = -1;
+    show(S_WIFI);
+}
+
+static void passCancel(lv_event_t *) { show(S_WIFI); }
+
+static void buildWifiKeys()
+{
+    lv_obj_t *s = screens[S_WIFI_KEYS] = screen();
+    lv_obj_t *x = button(s, 4, 4, 48, 48, col::BG, 0, 24, passCancel);
+    lv_obj_center(text(x, &lv_font_montserrat_20, col::TEXT, LV_SYMBOL_CLOSE));
+    passKeys.title = text(s, &lv_font_montserrat_20, col::TEXT, "");
+    lv_obj_set_pos(passKeys.title, 56, 16);
+    lv_label_set_long_mode(passKeys.title, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(passKeys.title, 310);
+    lv_obj_t *done = button(s, 376, 10, 88, 38, col::ACCENT, 0, 10, passDone);
+    lv_obj_center(text(done, &lv_font_montserrat_16, col::ON_ACCENT, "SAVE"));
+    // Shown as typed, so a long password can be checked before it's saved.
+    passKeys.area = keyArea(s, 64);
+    passKeys.kb = lv_keyboard_create(s);
+    lv_obj_set_size(passKeys.kb, 480, 210);
+    lv_obj_align(passKeys.kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(passKeys.kb, passKeys.area);
+    styleKeyboard(passKeys.kb);
+    lv_obj_add_event_cb(passKeys.kb, passDone, LV_EVENT_READY, nullptr);
+    lv_obj_add_event_cb(passKeys.kb, passCancel, LV_EVENT_CANCEL, nullptr);
+}
+
+static void refreshWifiKeys()
+{
+    lv_label_set_text_fmt(passKeys.title, "Password for %s", wifiSsid);
+    lv_textarea_set_text(passKeys.area, "");
+    lv_keyboard_set_mode(passKeys.kb, LV_KEYBOARD_MODE_TEXT_LOWER);
+}
+
+// --- Pairing code ---------------------------------------------------------------------------
+// Six boxes and a dash, as the website shows the code (and the app takes it).
+
+static const char *CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+static struct
+{
+    lv_obj_t *area, *kb, *box[6], *ch[6], *go;
+} pairPage;
+
+static void pairCancel(lv_event_t *) { show(S_SYNC); }
+
+static void pairGo(lv_event_t *)
+{
+    const char *code = lv_textarea_get_text(pairPage.area);
+    if (strlen(code) != 6) return;
+    cloud::startPair(code);
+    show(S_SYNC);
+}
+
+// Keeps the code to valid characters in capitals, and shows it in the boxes.
+static void pairChanged(lv_event_t *)
+{
+    const char *t = lv_textarea_get_text(pairPage.area);
+    char clean[7] = "";
+    int n = 0;
+    for (const char *p = t; *p && n < 6; p++)
+    {
+        char c = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
+        if (strchr(CODE_CHARS, c)) clean[n++] = c;
+    }
+    clean[n] = '\0';
+    if (strcmp(clean, t)) lv_textarea_set_text(pairPage.area, clean);
+    for (int i = 0; i < 6; i++)
+    {
+        char c[2] = {i < n ? clean[i] : '\0', '\0'};
+        lv_label_set_text(pairPage.ch[i], c);
+        lv_obj_set_style_border_color(pairPage.box[i], lv_color_hex(i == (n < 6 ? n : 5) ? col::ACCENT : col::LINE), 0);
+    }
+    lv_obj_set_style_bg_color(pairPage.go, lv_color_hex(n == 6 ? col::ACCENT : col::LINE), 0);
+    if (lv_keyboard_get_mode(pairPage.kb) == LV_KEYBOARD_MODE_TEXT_LOWER)
+        lv_keyboard_set_mode(pairPage.kb, LV_KEYBOARD_MODE_TEXT_UPPER);
+}
+
+static void buildPair()
+{
+    lv_obj_t *s = screens[S_PAIR] = screen();
+    lv_obj_t *x = button(s, 4, 4, 48, 48, col::BG, 0, 24, pairCancel);
+    lv_obj_center(text(x, &lv_font_montserrat_20, col::TEXT, LV_SYMBOL_CLOSE));
+    lv_obj_set_pos(text(s, &lv_font_montserrat_20, col::TEXT, "Pairing code"), 56, 8);
+    lv_obj_set_pos(text(s, &lv_font_montserrat_12, col::MUTED, "Website: Devices > Pair a device"), 56, 34);
+    pairPage.go = button(s, 376, 10, 88, 38, col::LINE, 0, 10, pairGo);
+    lv_obj_center(text(pairPage.go, &lv_font_montserrat_16, col::ON_ACCENT, "PAIR"));
+
+    // 6 x 52 boxes, 8 apart, with 16 more for the dash after the third: centred.
+    int x0 = (480 - (6 * 52 + 5 * 8 + 16)) / 2;
+    for (int i = 0; i < 6; i++)
+    {
+        int bx = x0 + i * 60 + (i >= 3 ? 16 : 0);
+        pairPage.box[i] = panel(s, bx, 58, 52, 62, col::CODE_BOX, col::LINE, 8);
+        lv_obj_set_style_border_width(pairPage.box[i], 2, 0);
+        lv_obj_set_style_border_side(pairPage.box[i], LV_BORDER_SIDE_FULL, 0);
+        pairPage.ch[i] = text(pairPage.box[i], &lv_font_montserrat_40, col::TEXT, "");
+        lv_obj_center(pairPage.ch[i]);
+    }
+    panel(s, x0 + 3 * 60 - 4, 87, 12, 4, col::MUTED, 0, 2); // the dash
+
+    // Hidden: the keyboard types into it, the boxes show it.
+    pairPage.area = lv_textarea_create(s);
+    lv_obj_add_flag(pairPage.area, LV_OBJ_FLAG_HIDDEN);
+    lv_textarea_set_one_line(pairPage.area, true);
+    lv_textarea_set_max_length(pairPage.area, 6);
+    lv_obj_add_event_cb(pairPage.area, pairChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    pairPage.kb = lv_keyboard_create(s);
+    lv_obj_set_size(pairPage.kb, 480, 188);
+    lv_obj_align(pairPage.kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(pairPage.kb, pairPage.area);
+    lv_keyboard_set_mode(pairPage.kb, LV_KEYBOARD_MODE_TEXT_UPPER);
+    styleKeyboard(pairPage.kb);
+    lv_obj_add_event_cb(pairPage.kb, pairChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(pairPage.kb, pairGo, LV_EVENT_READY, nullptr);
+    lv_obj_add_event_cb(pairPage.kb, pairCancel, LV_EVENT_CANCEL, nullptr);
+}
+
+static void refreshPair()
+{
+    lv_textarea_set_text(pairPage.area, "");
+    pairChanged(nullptr);
+}
+
 // --- Navigation ---------------------------------------------------------------------------
 
 static void refresh(Screen s)
@@ -1158,6 +1546,10 @@ static void refresh(Screen s)
     case S_MESSAGES: refreshMessages(); break;
     case S_RACE: refreshRace(); break;
     case S_KEYBOARD: refreshKeyboard(); break;
+    case S_SYNC: refreshSync(); break;
+    case S_WIFI: refreshWifi(); break;
+    case S_WIFI_KEYS: refreshWifiKeys(); break;
+    case S_PAIR: refreshPair(); break;
     default: break;
     }
 }
@@ -1186,6 +1578,15 @@ static void tick(lv_timer_t *)
     else if (!armed && current == S_LIVE) show(S_IDLE);
     else if (current == S_LIVE) refreshLive();
     else if (current == S_SENSITIVITY) tickSensitivity();
+    else if (current == S_SYNC || current == S_WIFI || current == S_SETTINGS)
+    {
+        static uint32_t last = 0;
+        if (millis() - last >= 250) // a sync's progress, scan results
+        {
+            last = millis();
+            refresh(current);
+        }
+    }
     else if (current == S_IDLE)
     {
         static uint32_t last = 0;
@@ -1206,7 +1607,8 @@ void display::begin()
     // One screen at a time, letting go of LVGL in between: building them all takes
     // ~0.4 s, and the splash keeps barking meanwhile.
     void (*const builders[])() = {buildIdle,  buildLive,  buildSettings, buildChannel, buildSensitivity,
-                                  buildFalseReads, buildRadio, buildMessages, buildRace, buildKeyboard};
+                                  buildFalseReads, buildRadio, buildMessages, buildRace, buildKeyboard,
+                                  buildSync, buildWifi, buildWifiKeys, buildPair};
     for (auto build : builders)
     {
         board::lock();

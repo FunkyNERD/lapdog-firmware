@@ -8,4 +8,13 @@ if(LAPDOG_TOUCH)
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+if(LAPDOG_TOUCH)
+    # Website sync resolves one 22-character hostname. lwIP's DNS cache is static
+    # data in internal RAM, below the SDR's capture bank: 2 x 64-byte names instead
+    # of 4 x 256 (not in menuconfig, so a define for every component).
+    idf_build_set_property(COMPILE_DEFINITIONS "DNS_TABLE_SIZE=2" APPEND)
+    idf_build_set_property(COMPILE_DEFINITIONS "DNS_MAX_NAME_LENGTH=64" APPEND)
+endif()
+
 project(lapdog)

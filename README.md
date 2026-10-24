@@ -53,6 +53,7 @@ pio device monitor -e c3_oled
 | Channel | band tabs and the band's 8 channels |
 | Sensitivity | live signal graph with the enter/exit lines, Low/Med/High, enter and exit in 0.5 dB steps |
 | False reads, Radio output, Race messages, Race defaults | the same settings as the app; event name on an on-screen keyboard (capitals only, like the goggles' font) |
+| Website sync | pairing status, heats waiting, **SYNC NOW**; Wi-Fi (saved networks, scan, password keyboard); the pairing code in six boxes, as the website shows it |
 
 Changes save to the timer straight away. Settings are only reachable while idle; arming from anywhere (screen, BOOT, USB) shows the armed screen. The board needs a 5.8 GHz antenna on its U.FL connector. If the picture or touch comes out mirrored, the orientation flags are at the top of `src/touch/board.cpp`.
 
@@ -61,6 +62,15 @@ pio run -e c5_touch -t upload
 ```
 
 The board's component (`boards/c5_touch/lapdog_touch/`, with LVGL and the display/touch drivers from the ESP-IDF component registry) is only added to this build.
+
+#### Website sync
+
+The touch timer uploads its own heats to the pilot's account on the LapDog website, as device kind `timer` (lapdog-web `docs/dev/device-api.md`), like LapDog LCD and the Android app. It's manual: Settings > Website sync > **SYNC NOW**.
+
+- **Heats:** `include/heat_log.h` follows the session's frames by the app's rules and turns each finished heat into the upload body the app sends, so the website merges the two copies of a heat when the app was listening too. Heats with laps go to the **microSD card** (`src/heatstore.cpp`: `/lapdog/out/H00042.BIN` until uploaded, then `/lapdog/sent/`). The card shares the display's SPI bus, chip select GPIO 9, and every card command waits for the display's transfers to finish. Without a card, nothing is kept for sync; the console's `sd` reports what it finds.
+- **Radio:** a sync only runs while disarmed, and arming waits until it's done. It leaves promiscuous mode, joins a saved network (2.4 GHz only: 5 GHz is the video band), uploads over HTTPS (ESP-IDF's certificate bundle), then hands the radio back to ESP-NOW and the receiver.
+- **Numbering:** race numbers come from the website's `counters`, shared with the pilot's other devices, as on LapDog LCD. Each heat file keeps the number it was given, so a retry reuses it. The token, networks and numbering are in NVS, written from the timing loop (the sync task's stack is in PSRAM).
+- **Internal RAM:** static data must stay below the SDR's capture bank (`sram_guard.ld`). The sync code's buffers are in PSRAM, lwIP is cut down (no IPv6, no DHCP server, 4 sockets), and the DNS cache holds 2 x 64-byte names (`CMakeLists.txt`).
 
 ### SDR (C5)
 
@@ -100,6 +110,8 @@ The workflow pulls `vrxc-msp` (public) over HTTPS rather than the `ssh://` URL i
 | `src/sdr.*` | Band power per sample: ESP-SDR snapshots on the C5, a flat floor on the C3, plus `sim` passes |
 | `src/esp_sdr/` | The C5 receive path ported from ESP-SDR (GPL-3.0) |
 | `src/touch/` | Touch board: display/touch bring-up (`board.cpp`), boot splash (`splash.cpp`) and the LVGL screens (`ui.cpp`) |
+| `include/heat_log.h` | Finished heats from the session's frames, and the website's race upload body (pure logic, native-tested) |
+| `src/cloud.*`, `src/heatstore.*` | Touch timer website sync: Wi-Fi, pairing and uploads; heats on the microSD card |
 | `tools/gen-touch-art.py` | Generates `src/touch/touch_art.h` (the splash mark, wordmark and top-bar lockup) from lapdog-web's brand kit: rerun it when the brand changes |
 | `boards/c5_touch/` | The touch board's component: LVGL, display and touch drivers (only in `env:c5_touch`) |
 | `src/outputs.*` | USB `F:` lines; BLE advert burst (NimBLE) **or** ESP-NOW OSD (via `vrxc-msp`) |

@@ -107,6 +107,17 @@ void board::backlight(int percent)
 bool board::lock(uint32_t timeoutMs) { return lvgl_port_lock(timeoutMs); }
 void board::unlock() { lvgl_port_unlock(); }
 
+static esp_lcd_panel_io_handle_t panelIo = nullptr;
+
+void board::lockBus()
+{
+    lvgl_port_lock(0);
+    // A parameterless no-op command: queued behind the pixel transfers, so it returns once they're out.
+    if (panelIo) esp_lcd_panel_io_tx_param(panelIo, -1, nullptr, 0);
+}
+
+void board::unlockBus() { lvgl_port_unlock(); }
+
 lv_display_t *board::begin(void (*firstFrame)())
 {
     firstFrameCb = firstFrame;
@@ -137,6 +148,7 @@ lv_display_t *board::begin(void (*firstFrame)())
     ioCfg.spi_mode = 0;
     ioCfg.trans_queue_depth = 10;
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_SPI, &ioCfg, &io));
+    panelIo = io;
 
     esp_lcd_panel_handle_t panel = nullptr;
     esp_lcd_panel_dev_config_t panelCfg = {};

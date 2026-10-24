@@ -39,3 +39,18 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_touch.csv"
 
 # Skip the 8 MB PSRAM self-test at boot (about a second).
 # CONFIG_SPIRAM_MEMTEST is not set
+
+# Website sync (cloud.cpp): TLS buffers in PSRAM (internal RAM is the tight spot),
+# and a FAT filesystem on the microSD card (8.3 names are enough: heatstore.cpp).
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+# lwIP's static tables live in internal RAM, below the SDR's capture bank: only
+# what one HTTPS client on 2.4 GHz Wi-Fi needs (no IPv6, no DHCP server, few sockets).
+CONFIG_LWIP_IPV6=n
+CONFIG_LWIP_DHCPS=n
+CONFIG_LWIP_MAX_SOCKETS=4
+# The AES and SHA engines take DMA buffers from internal RAM, which a TLS handshake
+# here can't spare ("esp-aes: Failed to allocate memory"): do them in software.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+CONFIG_MBEDTLS_HARDWARE_SHA=n

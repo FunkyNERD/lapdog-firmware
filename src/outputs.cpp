@@ -49,6 +49,10 @@ static void wifiStart(const uint8_t uid[6])
         ESP_ERROR_CHECK(esp_netif_init());
         esp_err_t err = esp_event_loop_create_default();
         if (err != ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(err);
+#if LAPDOG_TOUCH
+        // Website sync (cloud.cpp) joins a network on this interface; nothing runs on it otherwise.
+        esp_netif_create_default_wifi_sta();
+#endif
         netifReady = true;
     }
     // Internal RAM is the tight spot on the C5 (the SDR's bank takes 128 KB).

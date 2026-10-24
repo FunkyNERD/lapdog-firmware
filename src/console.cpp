@@ -6,6 +6,7 @@
 
 #include "app.h"
 #include "bootlog.h"
+#include "cloud.h"
 #include "config.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
@@ -114,6 +115,8 @@ static void handleLine(char *line)
     if (!strcmp(cmd, "get")) printSettings();
     else if (!strcmp(cmd, "sim")) app::simulatePass();
     else if (!strcmp(cmd, "boot")) bootlog::print();
+    else if (!strcmp(cmd, "sd")) cloud::checkSd(); // its S: lines follow, from the sync task
+    else if (!strcmp(cmd, "net")) ok = cloud::startCheck(); // the result is logged
     else if (!strcmp(cmd, "rssi"))
     {
         char *v = strtok(nullptr, " ");

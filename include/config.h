@@ -93,6 +93,9 @@ constexpr uint32_t HEARTBEAT_MS = 5000;      // while armed
 constexpr uint32_t IDLE_HEARTBEAT_MS = 2000;
 constexpr uint32_t IDLE_HEARTBEATS_FOR_MS = 16000;
 constexpr uint8_t ESPNOW_CHANNEL = 1;        // 2.4 GHz only - never 5 GHz (overlaps the video band)
+
+// Website sync (touch timer, cloud.h): the LapDog website's device API.
+constexpr const char *WEBSITE_URL = "https://lapdog.funkynerd.com";
 constexpr uint32_t ESPNOW_FRAME_GAP_MS = 8;  // between OSD frames, as elrs-race-test sends them
 // A burst's frames go out one after another. The ones the app acts on (LAP, ARMED,
 // DISARMED, RACE, IGNORED, HEARTBEAT) get most of the airtime; the OSD text (TEXT)
