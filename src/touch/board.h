@@ -27,9 +27,9 @@ void backlight(int percent);
 bool lock(uint32_t timeoutMs = 0);
 void unlock();
 
-// The SPI bus to itself, for the microSD card that shares it with the display:
-// holds LVGL (so nothing new is drawn) and waits for the display transfers still in
-// flight - a finished flush has only queued them. Not from LVGL's own task.
+// The SPI bus to itself, for the microSD card that shares it with the display: waits
+// until no display flush is under way, and keeps the next one waiting until unlockBus().
+// Not from LVGL's own task.
 void lockBus();
 void unlockBus();
 

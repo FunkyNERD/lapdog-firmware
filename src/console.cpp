@@ -117,6 +117,7 @@ static void handleLine(char *line)
     else if (!strcmp(cmd, "boot")) bootlog::print();
     else if (!strcmp(cmd, "sd")) cloud::checkSd(); // its S: lines follow, from the sync task
     else if (!strcmp(cmd, "net")) ok = cloud::startCheck(); // the result is logged
+    else if (!strcmp(cmd, "sync")) ok = cloud::startSync(); // as SYNC NOW; the result is logged
     else if (!strcmp(cmd, "rssi"))
     {
         char *v = strtok(nullptr, " ");

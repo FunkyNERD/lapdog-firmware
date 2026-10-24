@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "board";
@@ -107,16 +108,86 @@ void board::backlight(int percent)
 bool board::lock(uint32_t timeoutMs) { return lvgl_port_lock(timeoutMs); }
 void board::unlock() { lvgl_port_unlock(); }
 
+// The SPI bus between the display and the microSD card, as Waveshare's own firmware
+// shares it: a flush holds it from FLUSH_START until its pixels are actually out
+// (FLUSH_FINISH only means queued), and every card command holds it too. Without it,
+// card commands land between a flush's transfers, its completion is lost, and LVGL
+// spins forever waiting for it.
 static esp_lcd_panel_io_handle_t panelIo = nullptr;
+static SemaphoreHandle_t busMutex = nullptr;
+
+static void flushEvent(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_FLUSH_START)
+    {
+        xSemaphoreTake(busMutex, portMAX_DELAY);
+        return;
+    }
+    // A parameterless no-op command: queued behind the pixel transfers, so it returns once they're out.
+    esp_lcd_panel_io_tx_param(panelIo, -1, nullptr, 0);
+    xSemaphoreGive(busMutex);
+}
+
+// A dropped transfer must not freeze the screen. The SPI driver copies a buffer it
+// can't DMA from (a command's parameters on LVGL's PSRAM stack, or pixels in an odd
+// byte count) into internal RAM first, and while Wi-Fi is busy (website sync) that
+// copy can fail. The panel driver doesn't say so: the pixels just never go out, and
+// LVGL would spin forever waiting for their done-interrupt. So pixel runs are kept to
+// even widths (no copy needed), and LVGL waits on a semaphore the done-interrupt gives
+// instead of spinning: if it hasn't come in FLUSH_TIMEOUT_MS the transfer was lost,
+// and the whole screen is redrawn a moment later.
+static constexpr uint32_t FLUSH_TIMEOUT_MS = 100;
+static SemaphoreHandle_t flushDone = nullptr;
+static volatile bool redrawWanted = false;
+
+static void roundToEven(lv_area_t *a)
+{
+    a->x1 &= ~1;
+    a->x2 |= 1;
+}
+
+static bool colorDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t *, void *disp)
+{
+    lv_display_flush_ready((lv_display_t *)disp);
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(flushDone, &woken);
+    return woken == pdTRUE;
+}
+
+static void flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
+{
+    lv_draw_sw_rgb565_swap(px, lv_area_get_size(area)); // swap_bytes, as the port's own flush
+    xSemaphoreTake(flushDone, 0);
+    if (esp_lcd_panel_draw_bitmap(panelHandle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px) != ESP_OK)
+    {
+        redrawWanted = true;
+        lv_display_flush_ready(disp);
+        xSemaphoreGive(flushDone);
+    }
+}
+
+// LVGL marks the flush done once this returns.
+static void flushWait(lv_display_t *)
+{
+    if (xSemaphoreTake(flushDone, pdMS_TO_TICKS(FLUSH_TIMEOUT_MS)) != pdTRUE) redrawWanted = true;
+}
+
+static void redraw(lv_timer_t *)
+{
+    if (!redrawWanted) return;
+    redrawWanted = false;
+    lv_obj_invalidate(lv_screen_active());
+}
 
 void board::lockBus()
 {
-    lvgl_port_lock(0);
-    // A parameterless no-op command: queued behind the pixel transfers, so it returns once they're out.
-    if (panelIo) esp_lcd_panel_io_tx_param(panelIo, -1, nullptr, 0);
+    if (busMutex) xSemaphoreTake(busMutex, portMAX_DELAY);
 }
 
-void board::unlockBus() { lvgl_port_unlock(); }
+void board::unlockBus()
+{
+    if (busMutex) xSemaphoreGive(busMutex);
+}
 
 lv_display_t *board::begin(void (*firstFrame)())
 {
@@ -191,6 +262,7 @@ lv_display_t *board::begin(void (*firstFrame)())
     dispCfg.flags.buff_dma = true;
     dispCfg.flags.buff_spiram = false;
     dispCfg.flags.swap_bytes = true;
+    dispCfg.rounder_cb = roundToEven;
     lv_display_t *disp = lvgl_port_add_disp(&dispCfg);
     if (!disp)
     {
@@ -211,6 +283,15 @@ lv_display_t *board::begin(void (*firstFrame)())
             else board::backlight(100);
         },
         LV_EVENT_FLUSH_FINISH, disp);
+    busMutex = xSemaphoreCreateMutex();
+    flushDone = xSemaphoreCreateBinary();
+    lv_display_set_flush_cb(disp, flush);
+    lv_display_set_flush_wait_cb(disp, flushWait);
+    const esp_lcd_panel_io_callbacks_t done = {.on_color_trans_done = colorDone};
+    esp_lcd_panel_io_register_event_callbacks(io, &done, disp); // in place of the port's
+    lv_timer_create(redraw, 100, nullptr);
+    lv_display_add_event_cb(disp, flushEvent, LV_EVENT_FLUSH_START, nullptr);
+    lv_display_add_event_cb(disp, flushEvent, LV_EVENT_FLUSH_FINISH, nullptr);
 
     esp_lcd_panel_io_handle_t touchIo = nullptr;
     esp_lcd_panel_io_i2c_config_t touchIoCfg = ESP_LCD_TOUCH_IO_I2C_FT6336_CONFIG();

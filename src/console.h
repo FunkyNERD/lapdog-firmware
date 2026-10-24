@@ -29,6 +29,7 @@
 //                            it isn't yet): S:sd=<card>|none, sd.mb, sd.waiting, sd.sent, sd.next
 //   net                      touch timer: join a saved Wi-Fi network and fetch the website over
 //                            HTTPS, to check website sync can reach it (the result is logged)
+//   sync                     touch timer: as SYNC NOW on the screen (the result is logged)
 //   sdr                      receiver state: S:sdr=on|off|none, sdr.gain, sdr.gainmax,
 //                            sdr.bw, sdr.level (dB above baseline), sdr.dbfs (last
 //                            snapshot, dB full scale), sdr.errors
