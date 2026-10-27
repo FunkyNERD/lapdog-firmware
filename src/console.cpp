@@ -10,6 +10,8 @@
 #include "config.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
+#include "esp_attr.h"
+#include "hal/usb_serial_jtag_ll.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdr.h"
@@ -25,6 +27,60 @@ static void printSettings()
     const char *state = !app::armed() ? "idle" : app::stage() == race::PRACTICE_RUN ? "practice" : "race";
     printf("S:state=%s\n", state);
     printf("S:fw=%s\n", FIRMWARE_VERSION);
+}
+
+// USB output can wedge for good: the driver only sends when the hardware says the
+// host took the last packet, and ROM prints (the PHY's, during radio start) write to
+// the same FIFO behind its back. When a host opens the port right then - an app
+// reconnecting after a reset - that signal never comes and every line after it is
+// dropped, so "get" goes unanswered. The watchdog notices output not moving while a
+// host is attached and flushes the FIFO and re-arms the driver's interrupt.
+// What it saw is kept across a reset, for the "boot" command.
+struct UsbWatch
+{
+    uint32_t magic;
+    uint32_t kicks, lines;
+    uint32_t writable, intraw, intena; // the last sample before a kick
+};
+static constexpr uint32_t USB_WATCH_MAGIC = 0x4C445553; // "LDUS"
+static RTC_NOINIT_ATTR UsbWatch usbNow;
+static RTC_NOINIT_ATTR UsbWatch usbLast;
+
+static void watchUsb(void *)
+{
+    int stuck = 0;
+    while (true)
+    {
+        vTaskDelay(pdMS_TO_TICKS(250));
+        if (usb_serial_jtag_ll_txfifo_writable() || !usb_serial_jtag_is_connected())
+        {
+            stuck = 0;
+            continue;
+        }
+        // The host polls every millisecond; a second without room is stuck, or
+        // nothing on the host is reading (then flushing again does no harm).
+        if (++stuck < 4) continue;
+        stuck = 0;
+        usbNow.writable = usb_serial_jtag_ll_txfifo_writable();
+        usbNow.intraw = usb_serial_jtag_ll_get_intraw_mask();
+        usbNow.intena = usb_serial_jtag_ll_get_intr_ena_status();
+        usbNow.kicks++;
+        usb_serial_jtag_ll_txfifo_flush();
+        usb_serial_jtag_ll_ena_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+    }
+}
+
+static void printUsbWatch(const char *which, const UsbWatch &w)
+{
+    if (w.magic != USB_WATCH_MAGIC)
+    {
+        printf("S:usb.%s=none\n", which);
+        return;
+    }
+    printf("S:usb.%s.kicks=%lu\nS:usb.%s.lines=%lu\n", which, (unsigned long)w.kicks, which, (unsigned long)w.lines);
+    if (w.kicks)
+        printf("S:usb.%s.fifo=writable %lu, raw 0x%lx, enabled 0x%lx\n", which, (unsigned long)w.writable,
+               (unsigned long)w.intraw, (unsigned long)w.intena);
 }
 
 // "sdr": receiver state. "sdr gain <index|auto>", "sdr bw <MHz|0>": bring-up
@@ -114,7 +170,12 @@ static void handleLine(char *line)
     bool ok = true;
     if (!strcmp(cmd, "get")) printSettings();
     else if (!strcmp(cmd, "sim")) app::simulatePass();
-    else if (!strcmp(cmd, "boot")) bootlog::print();
+    else if (!strcmp(cmd, "boot"))
+    {
+        bootlog::print();
+        printUsbWatch("this", usbNow);
+        printUsbWatch("last", usbLast);
+    }
     else if (!strcmp(cmd, "sd")) cloud::checkSd(); // its S: lines follow, from the sync task
     else if (!strcmp(cmd, "net")) ok = cloud::startCheck(); // the result is logged
     else if (!strcmp(cmd, "sync")) ok = cloud::startSync(); // as SYNC NOW; the result is logged
@@ -176,6 +237,7 @@ static void task(void *)
             continue;
         }
         line[strcspn(line, "\r\n")] = '\0';
+        usbNow.lines++;
         handleLine(line);
     }
 }
@@ -188,5 +250,10 @@ void console::begin()
     usb_serial_jtag_driver_install(&ucfg);
     usb_serial_jtag_vfs_use_driver();
     setvbuf(stdin, nullptr, _IONBF, 0);
+    if (usbNow.magic == USB_WATCH_MAGIC) usbLast = usbNow;
+    else usbLast.magic = 0;
+    usbNow = {};
+    usbNow.magic = USB_WATCH_MAGIC;
     xTaskCreate(task, "console", 4096, nullptr, 5, nullptr);
+    xTaskCreate(watchUsb, "usbwatch", 2048, nullptr, 2, nullptr);
 }
