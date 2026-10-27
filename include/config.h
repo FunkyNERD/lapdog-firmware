@@ -11,7 +11,7 @@
 // Firmware version. Releases set it from the tag (tools/release.sh keeps this default in step),
 // so a USB build of a tagged commit reports the same version.
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.4.1"
+#define FIRMWARE_VERSION "0.4.2"
 #endif
 
 namespace cfg
