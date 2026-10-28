@@ -58,7 +58,7 @@ jobs:
       - name: Fetch vrxc-msp over HTTPS
         # GITHUB_SERVER_URL is the in-cluster address, so name the public host explicitly.
         run: |
-          git config --global url."https://git.hazaar.io/".insteadOf "ssh://git@git.hazaar.io/"
+          git config --global url."https://git.hazaar.dev/".insteadOf "ssh://git@git.hazaar.dev/"
 
       - name: Work out the version
         run: |
