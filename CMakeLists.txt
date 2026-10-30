@@ -7,6 +7,12 @@ if(LAPDOG_TOUCH)
     list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/boards/c5_touch")
 endif()
 
+# env:c5_lcd147 (Waveshare ESP32-C5-LCD-1.47) passes -DLAPDOG_LCD147=1: its component
+# brings in the RGB LED driver.
+if(LAPDOG_LCD147)
+    list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/boards/c5_lcd147")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 if(LAPDOG_TOUCH)

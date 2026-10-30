@@ -15,6 +15,10 @@ if(LAPDOG_TOUCH)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE LAPDOG_TOUCH=1)
 endif()
 
+if(LAPDOG_LCD147)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE LAPDOG_LCD147=1)
+endif()
+
 if(IDF_TARGET STREQUAL "esp32c5")
     # Point the PHY's channel setup at our frequency during RX DC measurement,
     # and count DC re-measurements (esp_sdr_c5.c); keep static data clear of

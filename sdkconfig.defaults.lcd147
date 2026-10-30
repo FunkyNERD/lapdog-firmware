@@ -1,0 +1,8 @@
+# env:c5_lcd147 only (Waveshare ESP32-C5-LCD-1.47), on top of sdkconfig.defaults and
+# sdkconfig.defaults.esp32c5.
+
+# The SPI master driver (the display) brings ~10 KB of IRAM with its interrupt
+# handler there, which pushes static data into the SDR's capture bank. Run it from
+# flash: a late display interrupt doesn't matter, and the timing loop outranks the
+# screen's task.
+# CONFIG_SPI_MASTER_ISR_IN_IRAM is not set

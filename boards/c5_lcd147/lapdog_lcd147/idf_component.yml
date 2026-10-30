@@ -1,0 +1,6 @@
+## Only built for env:c5_lcd147 (LAPDOG_LCD147, see the top-level CMakeLists.txt).
+dependencies:
+  idf: ">=5.5"
+  espressif/led_strip:
+    version: "^3.0.0"
+    public: true

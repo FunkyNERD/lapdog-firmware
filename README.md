@@ -72,6 +72,18 @@ The touch timer uploads its own heats to the pilot's account on the LapDog websi
 - **Numbering:** race numbers come from the website's `counters`, shared with the pilot's other devices, as on LapDog LCD. Each heat file keeps the number it was given, so a retry reuses it. The token, networks and numbering are in NVS, written from the timing loop (the sync task's stack is in PSRAM).
 - **Internal RAM:** static data must stay below the SDR's capture bank (`sram_guard.ld`). The sync code's buffers are in PSRAM, lwIP is cut down (no IPv6, no DHCP server, 4 sockets), and the DNS cache holds 2 x 64-byte names (`CMakeLists.txt`).
 
+### Waveshare ESP32-C5-LCD-1.47 (small screen timer)
+
+`env:c5_lcd147` is the timer on Waveshare's 1.47" board (ESP32-C5, 4 MB flash, no PSRAM, onboard ceramic antenna). The same timer with a 320x172 screen (ST7789 over SPI) and an RGB LED, but no touch: **BOOT** arms and disarms it (long press) and starts the next heat (short press), and the app or USB console changes the settings. The screen shows the heat and channel, the running lap clock, the last and best lap, and a signal bar with the detector's enter level marked on it. The LED is blue blinking when idle, green when armed, and flickers white on a lap.
+
+There's no LVGL here (no PSRAM, and the SDR's capture bank takes 128 KB of internal RAM): `src/lcd147/screen.cpp` draws the screen a strip at a time from the 5x7 font, only when something changed. The microSD slot shares the display's SPI pins, so there's no website sync on this board. If the picture comes out mirrored or shifted, the orientation flags are at the top of `screen.cpp`.
+
+```bash
+pio run -e c5_lcd147 -t upload
+```
+
+The board's component (`boards/c5_lcd147/lapdog_lcd147/`, for the RGB LED driver) is only added to this build.
+
 ### SDR (C5)
 
 The receive side of ESP-SDR, ported in `src/esp_sdr/` without its serial protocol: tune, re-measure RX DC at the channel's frequency, fixed gain, and one short raw I/Q snapshot per sample (1024 samples at 20 MS/s through a ~20 MHz analog filter, every 5 ms). `sdr.cpp` turns each snapshot into power in dBFS, and the detector compares that with an in-room baseline it tracks itself (down quickly, up slowly, never during a peak). Wi-Fi stays up on the C5 even with ESP-NOW off, in promiscuous mode as ESP-SDR runs it: it powers and calibrates the PHY, and without promiscuous mode the receive chain is idle and every sample comes back the same.
@@ -114,6 +126,8 @@ The workflow pulls `vrxc-msp` (public) over HTTPS rather than the `ssh://` URL i
 | `src/cloud.*`, `src/heatstore.*` | Touch timer website sync: Wi-Fi, pairing and uploads; heats on the microSD card |
 | `tools/gen-touch-art.py` | Generates `src/touch/touch_art.h` (the splash mark, wordmark and top-bar lockup) from lapdog-web's brand kit: rerun it when the brand changes |
 | `boards/c5_touch/` | The touch board's component: LVGL, display and touch drivers (only in `env:c5_touch`) |
+| `src/lcd147/`, `boards/c5_lcd147/` | The 1.47" board's screen and its component (only in `env:c5_lcd147`) |
+| `src/session_view.*` | What the session is doing, from its frames, for the small screens (OLED, 1.47" LCD) |
 | `src/outputs.*` | USB `F:` lines; BLE advert burst (NimBLE) **or** ESP-NOW OSD (via `vrxc-msp`) |
 | `src/console.*` | USB commands - full list in `console.h` |
 | `src/settings.*`, `button.*`, `led.*` | NVS settings, BOOT long/short press, status LED |

@@ -6,6 +6,10 @@
 
 // The touch board's screens are in src/touch/.
 
+#elif LAPDOG_LCD147
+
+// The 1.47" board's screen is in src/lcd147/.
+
 #elif !LAPDOG_OLED
 
 void display::begin() {}
@@ -26,6 +30,7 @@ void display::bootDone() {}
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "race.h"
+#include "session_view.h"
 #include "settings.h"
 
 static const char *TAG = "oled";
@@ -144,70 +149,11 @@ static void bigText(int x, int page, const char *s)
 
 // --- State, from the session's frames ------------------------------------------------
 
-struct State
-{
-    bool armed;
-    bool everArmed;
-    uint8_t mode;
-    uint8_t stage;
-    uint16_t heat;
-    uint8_t lapLimit;
-    uint8_t laps;      // completed
-    bool started;      // the start pass (practice) or holeshot (race) is in
-    uint32_t lapAtMs;  // local clock at the last pass: the lap in progress started then
-    uint32_t lastMs;   // last lap's time
-    bool lastBest;
-    uint32_t bestMs;
-    uint32_t raceMs;   // total at the finish
-    uint32_t flashUntilMs;
-};
-
-static State st = {};
-static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+using session_view::State;
 
 static uint32_t millis() { return (uint32_t)(esp_timer_get_time() / 1000); }
 
-void display::frame(const lapframe::Frame &f)
-{
-    uint32_t now = millis();
-    portENTER_CRITICAL(&lock);
-    switch (f.type)
-    {
-    case lapframe::ARMED:
-        st = {};
-        st.armed = st.everArmed = true;
-        st.mode = f.mode;
-        st.heat = f.heat;
-        st.lapLimit = f.lapLimit;
-        st.stage = f.mode == race::RACE ? race::STAGING : race::PRACTICE_RUN;
-        break;
-    case lapframe::DISARMED:
-        st.armed = false;
-        break;
-    case lapframe::HEARTBEAT:
-        st.stage = f.stage;
-        break;
-    case lapframe::RACE:
-        st.stage = f.stage;
-        if (f.stage == race::FINISHED) st.raceMs = f.ms;
-        break;
-    case lapframe::LAP:
-        st.started = true;
-        st.lapAtMs = now;
-        if (f.lap > 0)
-        {
-            st.laps = f.lap;
-            st.lastMs = f.ms;
-            st.lastBest = f.flags & lapframe::LAP_BEST;
-            if (st.lastBest || !st.bestMs) st.bestMs = f.ms;
-            if (f.flags & lapframe::LAP_FINAL) st.stage = race::FINISHED;
-        }
-        st.flashUntilMs = now + 300;
-        break;
-    default: break;
-    }
-    portEXIT_CRITICAL(&lock);
-}
+void display::frame(const lapframe::Frame &f) { session_view::frame(f); }
 
 static void draw(const State &s, uint32_t now)
 {
@@ -288,9 +234,7 @@ static void task(void *)
     while (true)
     {
         uint32_t now = millis();
-        portENTER_CRITICAL(&lock);
-        State s = st;
-        portEXIT_CRITICAL(&lock);
+        State s = session_view::get();
         draw(s, now);
         flush();
         bool flash = (int32_t)(s.flashUntilMs - now) > 0;

@@ -36,6 +36,19 @@ constexpr gpio_num_t PIN_OLED_SCL = GPIO_NUM_6;
 constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_28;
 constexpr gpio_num_t PIN_LED = GPIO_NUM_NC;
 constexpr bool LED_ACTIVE_LOW = false;
+#elif LAPDOG_LCD147
+// Waveshare ESP32-C5-LCD-1.47 (env:c5_lcd147). The LED is a WS2812 on GPIO 8, driven by led.cpp.
+constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_28;
+constexpr gpio_num_t PIN_LED = GPIO_NUM_NC;
+constexpr bool LED_ACTIVE_LOW = false;
+constexpr gpio_num_t PIN_RGB_LED = GPIO_NUM_8;
+// ST7789 over SPI (the microSD slot shares CLK and MOSI, so it's left alone).
+constexpr gpio_num_t PIN_LCD_CLK = GPIO_NUM_7;
+constexpr gpio_num_t PIN_LCD_MOSI = GPIO_NUM_6;
+constexpr gpio_num_t PIN_LCD_CS = GPIO_NUM_23;
+constexpr gpio_num_t PIN_LCD_DC = GPIO_NUM_24;
+constexpr gpio_num_t PIN_LCD_RST = GPIO_NUM_26;
+constexpr gpio_num_t PIN_LCD_BL = GPIO_NUM_10;
 #else
 // Mini ESP32-C5 dev board - the real timer.
 constexpr gpio_num_t PIN_BUTTON = GPIO_NUM_28;
