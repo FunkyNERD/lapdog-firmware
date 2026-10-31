@@ -27,6 +27,19 @@ struct State
     uint32_t bestMs;
     uint32_t raceMs;   // total at the finish
     uint32_t flashUntilMs;
+    // For the 1.47" screen: the lap just finished is held on screen for a moment, with how
+    // it compared to the best before it.
+    uint8_t lastLap;       // number of the last lap
+    uint8_t bestLap;
+    bool hasDelta;         // there was a best before the last lap
+    int32_t deltaMs;       // last lap minus the best before it (negative: a new best)
+    uint32_t holdUntilMs;  // local clock: show the last lap's time until then
+    uint32_t sumMs;        // of the completed laps, for the average
+    // The last finished heat, kept across the next arm: the idle screen's summary.
+    bool haveLast;
+    uint16_t lastHeat;
+    uint8_t lastLaps;
+    uint32_t lastBestMs, lastAvgMs;
 };
 
 void frame(const lapframe::Frame &f);
