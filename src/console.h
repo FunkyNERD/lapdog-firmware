@@ -26,8 +26,8 @@
 //   boot                     start-up step timestamps and reset reason, for this boot and
 //                            the one before (kept across a reset): S:boot.this|last.<step>=<ms> (+<ms>)
 //                            and the USB output watchdog: S:usb.this|last.kicks, .lines, .fifo
-//   sd                       touch timer: the microSD card for website sync (mounts it if
-//                            it isn't yet): S:sd=<card>|none, sd.mb, sd.waiting, sd.sent, sd.next
+//   sd                       touch timer: the flash heats are kept in: S:store.kb, store.free.kb,
+//                            store.waiting, store.sent, store.next (or S:store=none)
 //   net                      touch timer: join a saved Wi-Fi network and fetch the website over
 //                            HTTPS, to check website sync can reach it (the result is logged)
 //   sync                     touch timer: as SYNC NOW on the screen (the result is logged)

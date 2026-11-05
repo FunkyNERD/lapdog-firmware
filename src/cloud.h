@@ -56,11 +56,11 @@ struct Status
 };
 
 // After settings::begin() and the radio (outputs) are up: loads the pairing and
-// networks, and starts the task (which mounts the SD card).
+// networks, and starts the task (which mounts the flash store).
 void begin();
 
 // --- From the timing loop -----------------------------------------------------------
-// The session's frames: finished heats go to the SD card.
+// The session's frames: finished heats go to the board's flash (heatstore.h).
 void frame(const lapframe::Frame &f);
 // Before each arm: what the frames don't carry whole.
 void armContext(const char *event, const char *prefix);
@@ -73,8 +73,8 @@ bool busy();
 bool paired();
 const char *deviceName();
 const char *pilotName();
-bool sdReady();
-int pending(); // heats on the card not uploaded yet (-1 before the card is read)
+bool storeReady(); // the flash volume heats are kept in is mounted
+int pending(); // heats not uploaded yet (-1 before the store is read)
 
 int networkCount();
 Network network(int i);
@@ -84,7 +84,7 @@ void removeNetwork(int i);
 // Starting a job fails (false, the reason in status().message) if one is running,
 // the timer is armed, or its preconditions aren't met.
 bool startScan();
-// The console's "sd": mounts the card if it isn't, and logs what's on it.
+// The console's "store": flash use and heats kept.
 void checkSd();
 bool startPair(const char *code);
 bool startSync();

@@ -1,7 +1,9 @@
 # Touch timer partition table (Waveshare ESP32-C5-Touch-LCD-3.5, 32 MB flash,
 # laid out for 16 MB). LVGL and its fonts take the app past the 2 MB slot the
-# other boards use: one 6 MB app slot, room to grow.
+# other boards use: one 6 MB app slot, room to grow. The rest of the 16 MB is
+# `storage`, a FAT volume (wear levelled) holding finished heats (heatstore.h).
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   0x6000
 phy_init,   data, phy,     0xf000,   0x1000
 factory,    app,  factory, 0x10000,  0x600000
+storage,    data, fat,     0x610000, 0x9F0000

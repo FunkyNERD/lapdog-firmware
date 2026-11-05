@@ -74,7 +74,7 @@ static volatile bool radioBusy = false;
 static TaskHandle_t worker = nullptr;
 static QueueHandle_t heats = nullptr; // finished heats, timing loop -> task
 static volatile Job wanted = JOB_NONE;
-static volatile bool sdWanted = false; // the console's "sd": try the card again
+static volatile bool sdWanted = false; // the console's "sd": print the flash store
 static char pairCode[16];
 
 static heatlog::Recorder *recorder = nullptr; // timing loop only; in PSRAM
@@ -170,7 +170,7 @@ bool cloud::paired()
 
 const char *cloud::deviceName() { return state ? state->prefs.device : ""; }
 const char *cloud::pilotName() { return state ? state->prefs.pilot : ""; }
-bool cloud::sdReady() { return heatstore::ready(); }
+bool cloud::storeReady() { return heatstore::ready(); }
 int cloud::pending() { return pendingN; }
 
 int cloud::networkCount()
@@ -669,23 +669,24 @@ static bool jobUnpair()
 
 static void task(void *)
 {
-    if (!heatstore::begin()) setStatus("NO SD CARD - HEATS AREN'T KEPT FOR SYNC");
+    if (!heatstore::begin()) setStatus("FLASH STORAGE FAILED - HEATS AREN'T KEPT");
     pendingN = heatstore::pendingCount();
     heatlog::Heat &h = work->saving;
     while (true)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        // A card put in (or switched on) after boot: try again whenever it's needed.
+        // The flash volume failed to mount at boot: try again whenever it's needed.
         if (!heatstore::ready() && (sdWanted || uxQueueMessagesWaiting(heats) || wanted != JOB_NONE))
         {
-            if (heatstore::begin()) setStatus("SD CARD READY");
+            if (heatstore::begin()) setStatus("FLASH STORAGE READY");
             pendingN = heatstore::pendingCount();
         }
         if (sdWanted) heatstore::printInfo();
         sdWanted = false;
         while (xQueueReceive(heats, &h, 0) == pdTRUE)
         {
-            heatstore::save(h);
+            if (!heatstore::save(h) && heatstore::ready() && heatlog::uploadable(h))
+                setStatus("FLASH FULL - THIS HEAT WASN'T KEPT");
             pendingN = heatstore::pendingCount();
         }
         Job job = wanted;
@@ -795,7 +796,7 @@ bool cloud::busy() { return false; }
 bool cloud::paired() { return false; }
 const char *cloud::deviceName() { return ""; }
 const char *cloud::pilotName() { return ""; }
-bool cloud::sdReady() { return false; }
+bool cloud::storeReady() { return false; }
 int cloud::pending() { return -1; }
 int cloud::networkCount() { return 0; }
 cloud::Network cloud::network(int) { return {}; }

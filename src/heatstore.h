@@ -1,14 +1,19 @@
 #pragma once
-// Finished heats on the touch board's microSD card, until the website has them
-// (see cloud.h). One file per heat, as the heatlog::Heat it was recorded as:
-//   /sd/lapdog/out/H00042.BIN   not uploaded yet
-//   /sd/lapdog/sent/H00042.BIN  uploaded (kept: the card has room for years)
-// The number is the timer's own, counting up on this card. Each file also holds
-// the race number the website gave it on its first upload attempt, so a retry
-// sends it under the same one.
+// Finished heats on the touch board, until the website has them (see cloud.h). One
+// file per heat, as the heatlog::Heat it was recorded as, in the board's own flash
+// (a wear-levelled FAT volume in the `storage` partition, mounted at /store):
+//   /store/out/H00042.BIN   not uploaded yet
+//   /store/sent/H00042.BIN  uploaded
+// The number is the timer's own, counting up in the flash. Each file also holds the
+// race number the website gave it on its first upload attempt, so a retry sends it
+// under the same one.
 //
-// Only cloud.cpp's task calls these: the SD card shares the display's SPI bus,
-// and the timing loop's stack is too small for FAT. The SD card's CS is GPIO 9.
+// There is no SD card path: the card shares the display's SPI bus and the card
+// driver can't get DMA-capable RAM once the radios are up.
+//
+// Callable from any task: flash writes can't be made from a task whose stack is in
+// PSRAM (cloud.cpp's is), and FAT needs more stack than the timing loop has, so
+// every call runs on the store's own task.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -18,11 +23,11 @@
 namespace heatstore
 {
 
-bool begin(); // mounts the card; false (and stays false) if there isn't one
+bool begin(); // mounts the flash volume (formatting it the first time)
 bool ready();
-void printInfo(); // card, heats waiting and sent, as S: lines (the console's "sd")
+void printInfo(); // flash use, heats waiting and sent, as S: lines (the console's "store")
 
-// Saves a finished heat (uploadable ones only). False if the card failed.
+// Saves a finished heat (uploadable ones only). False if the flash is full or failed.
 bool save(const heatlog::Heat &h);
 
 struct Pending
@@ -42,5 +47,14 @@ bool markSent(uint32_t id);
 void clearRaceNos();
 // Move every sent heat back to out (pairing with another account sends them all).
 void resend();
+
+struct Usage
+{
+    uint64_t totalBytes, freeBytes;
+    int waiting, sent; // heats not uploaded yet, uploaded
+};
+Usage usage(); // zeros before begin()
+// Free space is low enough that the screen should say so (under 10 %).
+bool nearlyFull();
 
 } // namespace heatstore

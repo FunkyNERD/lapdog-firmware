@@ -24,6 +24,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "heatstore.h"
 #include "race.h"
 #include "settings.h"
 #include "splash.h"
@@ -702,7 +703,7 @@ static void refreshSettings()
     else lv_label_set_text_fmt(grid.value[5], "%s race - %u laps", t, s.raceLaps);
     int waiting = cloud::pending();
     if (!cloud::paired()) lv_label_set_text(grid.value[6], "Not paired");
-    else if (!cloud::sdReady()) lv_label_set_text(grid.value[6], "No SD card");
+    else if (!cloud::storeReady()) lv_label_set_text(grid.value[6], "No storage");
     else if (waiting > 0) lv_label_set_text_fmt(grid.value[6], "%d heat%s waiting", waiting, waiting == 1 ? "" : "s");
     else lv_label_set_text(grid.value[6], "Up to date");
 }
@@ -1164,7 +1165,7 @@ static void refreshKeyboard()
 
 // --- Website sync -------------------------------------------------------------------------
 // Pair once with a code from the website, save a 2.4 GHz network, then SYNC NOW
-// uploads every heat on the SD card that the website doesn't have (cloud.h).
+// uploads every heat in the timer's flash that the website doesn't have (cloud.h).
 
 static struct
 {
@@ -1238,7 +1239,7 @@ static void refreshSync()
     int waiting = cloud::pending();
     if (paired) lv_label_set_text_fmt(syncPage.title, "Paired as %s", cloud::deviceName());
     else lv_label_set_text(syncPage.title, "Not paired with the website");
-    if (!cloud::sdReady()) lv_label_set_text(syncPage.detail, "No SD card: finished heats aren't kept for sync");
+    if (!cloud::storeReady()) lv_label_set_text(syncPage.detail, "Flash storage failed: finished heats aren't kept for sync");
     else if (paired)
     {
         if (waiting < 0) waiting = 0;

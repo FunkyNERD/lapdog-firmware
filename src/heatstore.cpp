@@ -11,24 +11,22 @@
 #include <algorithm>
 #include <vector>
 
-#include "driver/gpio.h"
-#include "driver/sdspi_host.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
-#include "sdmmc_cmd.h"
-#include "touch/board.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "heatstore";
 
-static constexpr gpio_num_t PIN_SD_CS = GPIO_NUM_9;
-static constexpr gpio_num_t PIN_SD_MISO = GPIO_NUM_2; // on the display's bus (board.cpp)
-static constexpr spi_host_device_t SD_SPI = SPI2_HOST; // the display's bus (board.cpp)
-static const char *MOUNT = "/sd";
-static const char *OUT = "/sd/lapdog/out";
-static const char *SENT = "/sd/lapdog/sent";
+
+static const char *STORE = "/store";
+static const char *OUT = "/store/out";
+static const char *SENT = "/store/sent";
 
 // File layout: a small header, then the Heat as recorded. A new layout gets a new
-// version; files of an older one are skipped (and left on the card).
+// version; files of an older one are skipped (and left where they are).
 static constexpr uint32_t MAGIC = 0x4C444854; // "THDL"
 static constexpr uint16_t VERSION = 1;
 struct Header
@@ -39,18 +37,59 @@ struct Header
     int32_t raceNo;
 };
 
-static sdmmc_card_t *card = nullptr;
-
-// Every card command waits for the bus: the display's DMA and the card's polled
-// transfers can't share the SPI peripheral at once (Waveshare's firmware does the same).
-static esp_err_t transaction(int slot, sdmmc_command_t *cmd)
-{
-    board::lockBus();
-    esp_err_t err = sdspi_host_do_transaction(slot, cmd);
-    board::unlockBus();
-    return err;
-}
+static bool mounted = false;
+static heatstore::Usage cached = {}; // refreshed on the store's task after every change
+static wl_handle_t wl = WL_INVALID_HANDLE;
 static uint32_t nextId = 1;
+
+// --- The store's task -----------------------------------------------------------------------
+// Flash writes with the task's stack in PSRAM (cloud.cpp's) crash, and the timing
+// loop's stack is too small for FAT: so every call is handed to this task, whose stack
+// is in internal RAM, and the caller waits for it.
+
+// The task only exists for the length of a call: internal RAM is scarce (the SDR's capture
+// bank, the radios and the display's DMA buffers need what's left), so no stack is held
+// back while idle. A call that can't get a stack (False) is treated as a failed call.
+static TaskHandle_t storeTask = nullptr; // the running call's task, null between calls
+static SemaphoreHandle_t callLock = nullptr;
+
+struct Call
+{
+    void (*fn)(void *);
+    void *arg;
+    TaskHandle_t caller;
+};
+
+static void storeMain(void *p)
+{
+    Call *c = static_cast<Call *>(p);
+    storeTask = xTaskGetCurrentTaskHandle();
+    c->fn(c->arg);
+    xTaskNotifyGive(c->caller);
+    vTaskDelete(nullptr);
+}
+
+// Runs f on its own internal-stack task and waits. False (f not run) if there's no memory for one.
+template <typename F> static bool onStore(F f)
+{
+    if (storeTask && xTaskGetCurrentTaskHandle() == storeTask)
+    {
+        f();
+        return true;
+    }
+    if (!callLock) callLock = xSemaphoreCreateMutex();
+    if (!callLock) return false;
+    xSemaphoreTake(callLock, portMAX_DELAY);
+    Call c = {[](void *a) { (*static_cast<F *>(a))(); }, &f, xTaskGetCurrentTaskHandle()};
+    bool started = xTaskCreate(storeMain, "store", 5120, &c, 3, nullptr) == pdPASS;
+    if (started) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    else ESP_LOGW(TAG, "no memory for the store task");
+    storeTask = nullptr;
+    xSemaphoreGive(callLock);
+    return started;
+}
+
+// --- Files ----------------------------------------------------------------------------------
 
 static void path(char *out, size_t len, const char *dir, uint32_t id)
 {
@@ -79,79 +118,17 @@ template <typename F> static void eachId(const char *dir, F f)
     closedir(d);
 }
 
-bool heatstore::begin()
+static int countIn(const char *dir)
 {
-    // Deselect the card before anything else talks on the shared bus.
-    gpio_set_direction(PIN_SD_CS, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_SD_CS, 1);
-    gpio_pullup_en(PIN_SD_CS);
-    gpio_pullup_en(PIN_SD_MISO); // the card's data out floats until it's in SPI mode
-
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SD_SPI;
-    host.do_transaction = transaction;
-    host.max_freq_khz = 20000; // the bus also carries the display at 60 MHz, the card's limit is lower
-    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot.gpio_cs = PIN_SD_CS;
-    slot.host_id = SD_SPI;
-    esp_vfs_fat_sdmmc_mount_config_t mount = {};
-    mount.format_if_mount_failed = false;
-    mount.max_files = 3;
-    mount.allocation_unit_size = 16 * 1024;
-    esp_err_t err = esp_vfs_fat_sdspi_mount(MOUNT, &host, &slot, &mount, &card);
-    if (err != ESP_OK)
-    {
-        card = nullptr;
-        ESP_LOGW(TAG, "no SD card (%s): check it's in and works in a computer (FAT32)", esp_err_to_name(err));
-        return false;
-    }
-    mkdir("/sd/lapdog", 0775);
-    mkdir(OUT, 0775);
-    mkdir(SENT, 0775);
-    uint32_t top = 0;
-    auto high = [&](uint32_t id) { top = std::max(top, id); };
-    eachId(OUT, high);
-    eachId(SENT, high);
-    nextId = top + 1;
-    ESP_LOGI(TAG, "SD card %s, %llu MB; next heat file %lu, %d waiting", card->cid.name,
-             ((uint64_t)card->csd.capacity) * card->csd.sector_size / (1024 * 1024), (unsigned long)nextId,
-             pendingCount());
-    return true;
+    int n = 0;
+    eachId(dir, [&](uint32_t) { n++; });
+    return n;
 }
 
-bool heatstore::ready() { return card != nullptr; }
-
-void heatstore::printInfo()
+static bool exists(const char *p)
 {
-    if (!card)
-    {
-        printf("S:sd=none\n");
-        return;
-    }
-    int sent = 0;
-    eachId(SENT, [&](uint32_t) { sent++; });
-    printf("S:sd=%s\nS:sd.mb=%llu\nS:sd.waiting=%d\nS:sd.sent=%d\nS:sd.next=%lu\n", card->cid.name,
-           ((uint64_t)card->csd.capacity) * card->csd.sector_size / (1024 * 1024), pendingCount(), sent,
-           (unsigned long)nextId);
-}
-
-bool heatstore::save(const heatlog::Heat &h)
-{
-    if (!card || !heatlog::uploadable(h)) return false;
-    char p[40], tmp[40];
-    uint32_t id = nextId++;
-    path(p, sizeof(p), OUT, id);
-    snprintf(tmp, sizeof(tmp), "%s/NEW.TMP", OUT);
-    FILE *f = fopen(tmp, "wb");
-    if (!f) return false;
-    Header hd = {MAGIC, VERSION, (uint16_t)sizeof(heatlog::Heat), -1};
-    bool ok = fwrite(&hd, sizeof(hd), 1, f) == 1 && fwrite(&h, sizeof(h), 1, f) == 1;
-    ok = fclose(f) == 0 && ok;
-    // Written whole, then renamed: a pulled card never leaves half a heat behind.
-    if (ok) ok = rename(tmp, p) == 0;
-    if (!ok) unlink(tmp);
-    ESP_LOGI(TAG, "heat %u saved as %lu%s", h.heat, (unsigned long)id, ok ? "" : " - FAILED");
-    return ok;
+    struct stat st;
+    return stat(p, &st) == 0;
 }
 
 static bool readHeader(const char *p, Header &hd, FILE **keep = nullptr)
@@ -165,44 +142,131 @@ static bool readHeader(const char *p, Header &hd, FILE **keep = nullptr)
     return ok;
 }
 
+// --- The flash volume -----------------------------------------------------------------------
+
+// Counting the volume's free clusters and heats walks the FAT and the directories: done
+// after a change, not on every screen refresh.
+static void refreshUsage()
+{
+    heatstore::Usage u = {};
+    esp_vfs_fat_info(STORE, &u.totalBytes, &u.freeBytes);
+    u.waiting = countIn(OUT);
+    u.sent = countIn(SENT);
+    cached = u;
+}
+
+static bool beginImpl()
+{
+    if (mounted) return true;
+    esp_vfs_fat_mount_config_t cfg = {};
+    cfg.format_if_mount_failed = true; // the first boot after the partition appeared
+    cfg.max_files = 4;
+    cfg.allocation_unit_size = CONFIG_WL_SECTOR_SIZE;
+    esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl(STORE, "storage", &cfg, &wl);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "flash storage won't mount (%s): is the partition table flashed?", esp_err_to_name(err));
+        return false;
+    }
+    mounted = true;
+    mkdir(OUT, 0775);
+    mkdir(SENT, 0775);
+    uint32_t top = 0;
+    auto high = [&](uint32_t id) { top = std::max(top, id); };
+    eachId(OUT, high);
+    eachId(SENT, high);
+    nextId = top + 1;
+    refreshUsage();
+    ESP_LOGI(TAG, "flash storage %llu of %llu KB free; next heat file %lu, %d waiting", cached.freeBytes / 1024,
+             cached.totalBytes / 1024, (unsigned long)nextId, cached.waiting);
+    return true;
+}
+
+bool heatstore::begin()
+{
+    bool ok = false;
+    onStore([&] { ok = beginImpl(); });
+    return ok;
+}
+
+bool heatstore::ready() { return mounted; }
+
+heatstore::Usage heatstore::usage() { return cached; }
+
+bool heatstore::nearlyFull()
+{
+    Usage u = usage();
+    return u.totalBytes && u.freeBytes * 10 < u.totalBytes;
+}
+
+static bool saveImpl(const heatlog::Heat &h)
+{
+    char p[40], tmp[40];
+    uint32_t id = nextId++;
+    path(p, sizeof(p), OUT, id);
+    snprintf(tmp, sizeof(tmp), "%s/NEW.TMP", OUT);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return false;
+    Header hd = {MAGIC, VERSION, (uint16_t)sizeof(heatlog::Heat), -1};
+    bool ok = fwrite(&hd, sizeof(hd), 1, f) == 1 && fwrite(&h, sizeof(h), 1, f) == 1;
+    ok = fclose(f) == 0 && ok;
+    // Written whole, then renamed: a power cut never leaves half a heat behind.
+    if (ok) ok = rename(tmp, p) == 0;
+    if (!ok) unlink(tmp);
+    ESP_LOGI(TAG, "heat %u saved as %lu%s", h.heat, (unsigned long)id, ok ? "" : " - FAILED (flash full?)");
+    refreshUsage();
+    return ok;
+}
+
+bool heatstore::save(const heatlog::Heat &h)
+{
+    if (!mounted || !heatlog::uploadable(h)) return false;
+    bool ok = false;
+    onStore([&] { ok = saveImpl(h); });
+    return ok;
+}
+
 int heatstore::pending(Pending *out, int max)
 {
-    if (!card) return 0;
+    if (!mounted) return 0;
     int n = 0;
-    eachId(OUT, [&](uint32_t id) {
-        if (n < max) out[n++] = {id, -1};
+    onStore([&] {
+        eachId(OUT, [&](uint32_t id) {
+            if (n < max) out[n++] = {id, -1};
+        });
+        std::sort(out, out + n, [](const Pending &a, const Pending &b) { return a.id < b.id; });
+        for (int i = 0; i < n; i++)
+        {
+            char p[40];
+            path(p, sizeof(p), OUT, out[i].id);
+            Header hd;
+            out[i].raceNo = readHeader(p, hd) ? hd.raceNo : -1;
+        }
     });
-    std::sort(out, out + n, [](const Pending &a, const Pending &b) { return a.id < b.id; });
-    for (int i = 0; i < n; i++)
-    {
-        char p[40];
-        path(p, sizeof(p), OUT, out[i].id);
-        Header hd;
-        out[i].raceNo = readHeader(p, hd) ? hd.raceNo : -1;
-    }
     return n;
 }
 
 int heatstore::pendingCount()
 {
-    int n = 0;
-    if (card) eachId(OUT, [&](uint32_t) { n++; });
-    return n;
+    return cached.waiting;
 }
 
 bool heatstore::load(uint32_t id, heatlog::Heat &h)
 {
-    char p[40];
-    path(p, sizeof(p), OUT, id);
-    FILE *f = nullptr;
-    Header hd;
-    if (!readHeader(p, hd, &f)) return false;
-    bool ok = fread(&h, sizeof(h), 1, f) == 1;
-    fclose(f);
+    bool ok = false;
+    onStore([&] {
+        char p[40];
+        path(p, sizeof(p), OUT, id);
+        FILE *f = nullptr;
+        Header hd;
+        if (!readHeader(p, hd, &f)) return;
+        ok = fread(&h, sizeof(h), 1, f) == 1;
+        fclose(f);
+    });
     return ok;
 }
 
-bool heatstore::setRaceNo(uint32_t id, int32_t raceNo)
+static bool setRaceNoImpl(uint32_t id, int32_t raceNo)
 {
     char p[40];
     path(p, sizeof(p), OUT, id);
@@ -214,36 +278,62 @@ bool heatstore::setRaceNo(uint32_t id, int32_t raceNo)
     return fclose(f) == 0 && ok;
 }
 
+bool heatstore::setRaceNo(uint32_t id, int32_t raceNo)
+{
+    bool ok = false;
+    onStore([&] { ok = setRaceNoImpl(id, raceNo); });
+    return ok;
+}
+
 bool heatstore::markSent(uint32_t id)
 {
-    char from[40], to[40];
-    path(from, sizeof(from), OUT, id);
-    path(to, sizeof(to), SENT, id);
-    unlink(to);
-    return rename(from, to) == 0;
+    bool ok = false;
+    onStore([&] {
+        char from[40], to[40];
+        path(from, sizeof(from), OUT, id);
+        path(to, sizeof(to), SENT, id);
+        unlink(to);
+        ok = rename(from, to) == 0;
+        refreshUsage();
+    });
+    return ok;
 }
 
 void heatstore::clearRaceNos()
 {
-    if (!card) return;
-    std::vector<uint32_t> ids;
-    eachId(OUT, [&](uint32_t id) { ids.push_back(id); });
-    for (uint32_t id : ids) setRaceNo(id, -1);
+    if (!mounted) return;
+    onStore([&] {
+        std::vector<uint32_t> ids;
+        eachId(OUT, [&](uint32_t id) { ids.push_back(id); });
+        for (uint32_t id : ids) setRaceNoImpl(id, -1);
+    });
 }
 
 void heatstore::resend()
 {
-    if (!card) return;
-    std::vector<uint32_t> ids;
-    eachId(SENT, [&](uint32_t id) { ids.push_back(id); });
-    for (uint32_t id : ids)
-    {
-        char from[40], to[40];
-        path(from, sizeof(from), SENT, id);
-        path(to, sizeof(to), OUT, id);
-        rename(from, to);
-    }
+    if (!mounted) return;
+    onStore([&] {
+        std::vector<uint32_t> ids;
+        eachId(SENT, [&](uint32_t id) { ids.push_back(id); });
+        for (uint32_t id : ids)
+        {
+            char from[40], to[40];
+            path(from, sizeof(from), SENT, id);
+            path(to, sizeof(to), OUT, id);
+            rename(from, to);
+        }
+        refreshUsage();
+    });
     clearRaceNos();
+}
+
+void heatstore::printInfo()
+{
+    Usage u = usage();
+    if (!mounted) printf("S:store=none\n");
+    else
+        printf("S:store.kb=%llu\nS:store.free.kb=%llu\nS:store.waiting=%d\nS:store.sent=%d\nS:store.next=%lu\n",
+               u.totalBytes / 1024, u.freeBytes / 1024, u.waiting, u.sent, (unsigned long)nextId);
 }
 
 #else
@@ -259,5 +349,6 @@ bool heatstore::setRaceNo(uint32_t, int32_t) { return false; }
 bool heatstore::markSent(uint32_t) { return false; }
 void heatstore::clearRaceNos() {}
 void heatstore::resend() {}
-
+heatstore::Usage heatstore::usage() { return {}; }
+bool heatstore::nearlyFull() { return false; }
 #endif // LAPDOG_TOUCH

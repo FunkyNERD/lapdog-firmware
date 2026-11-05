@@ -60,7 +60,7 @@ public:
     void frame(const lapframe::Frame &f) override
     {
         display::frame(f);
-        cloud::frame(f); // finished heats to the SD card, for website sync
+        cloud::frame(f); // finished heats to the flash store, for website sync
         outputs::sink().frame(f);
     }
     void osd(uint8_t row, const char *text) override { outputs::sink().osd(row, text); }

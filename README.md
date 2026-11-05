@@ -67,7 +67,7 @@ The board's component (`boards/c5_touch/lapdog_touch/`, with LVGL and the displa
 
 The touch timer uploads its own heats to the pilot's account on the LapDog website, as device kind `timer` (lapdog-web `docs/dev/device-api.md`), like LapDog LCD and the Android app. It's manual: Settings > Website sync > **SYNC NOW**.
 
-- **Heats:** `include/heat_log.h` follows the session's frames by the app's rules and turns each finished heat into the upload body the app sends, so the website merges the two copies of a heat when the app was listening too. Heats with laps go to the **microSD card** (`src/heatstore.cpp`: `/lapdog/out/H00042.BIN` until uploaded, then `/lapdog/sent/`). The card shares the display's SPI bus, chip select GPIO 9, and every card command waits for the display's transfers to finish. Without a card, nothing is kept for sync; the console's `sd` reports what it finds.
+- **Heats:** `include/heat_log.h` follows the session's frames by the app's rules and turns each finished heat into the upload body the app sends, so the website merges the two copies of a heat when the app was listening too. Heats with laps go to the board's own flash (`src/heatstore.cpp`: a 10 MB wear-levelled FAT volume in the `storage` partition, `/store/out/H00042.BIN` until uploaded, then `/store/sent/`), so no card is needed. Flash writes run on a short-lived internal-stack task (a PSRAM-stack task can't write flash, and a permanent task would take RAM the radios and display need). The microSD slot isn't used: its driver can't get DMA-capable RAM once the radios are up. The console's `sd` reports the store (`S:store.*`).
 - **Radio:** a sync only runs while disarmed, and arming waits until it's done. It leaves promiscuous mode, joins a saved network (2.4 GHz only: 5 GHz is the video band), uploads over HTTPS (ESP-IDF's certificate bundle), then hands the radio back to ESP-NOW and the receiver.
 - **Numbering:** race numbers come from the website's `counters`, shared with the pilot's other devices, as on LapDog LCD. Each heat file keeps the number it was given, so a retry reuses it. The token, networks and numbering are in NVS, written from the timing loop (the sync task's stack is in PSRAM).
 - **Internal RAM:** static data must stay below the SDR's capture bank (`sram_guard.ld`). The sync code's buffers are in PSRAM, lwIP is cut down (no IPv6, no DHCP server, 4 sockets), and the DNS cache holds 2 x 64-byte names (`CMakeLists.txt`).
@@ -109,7 +109,7 @@ Bring-up from the console: `sdr` prints the receiver state (gain, level, last sn
 
 ### Flash layout
 
-The C5 mini and C3 have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 1 MB app slot, so `partitions.csv` gives a single ~2 MB app slot (no OTA yet). The touch build (LVGL and fonts, ~1.9 MB) uses `partitions_touch.csv`: 16 MB, one 6 MB app slot.
+The C5 mini and C3 have 4 MB flash. The Wi-Fi + NimBLE image is past ESP-IDF's default 1 MB app slot, so `partitions.csv` gives a single ~2 MB app slot (no OTA yet). The touch build (LVGL and fonts, ~2.3 MB) uses `partitions_touch.csv`: 16 MB, one 6 MB app slot and a 10 MB `storage` volume for finished heats. Flashing the app alone keeps the heats; a full-chip erase (or the browser flasher's factory image) wipes them.
 
 `vrxc-msp` comes from Forgejo over SSH. To work on it alongside this repo, switch the `lib_deps` line in `platformio.ini` to `symlink://../vrxc-msp`.
 
@@ -134,7 +134,7 @@ The workflow pulls `vrxc-msp` (public) over HTTPS rather than the `ssh://` URL i
 | `src/esp_sdr/` | The C5 receive path ported from ESP-SDR (GPL-3.0) |
 | `src/touch/` | Touch board: display/touch bring-up (`board.cpp`), boot splash (`splash.cpp`) and the LVGL screens (`ui.cpp`) |
 | `include/heat_log.h` | Finished heats from the session's frames, and the website's race upload body (pure logic, native-tested) |
-| `src/cloud.*`, `src/heatstore.*` | Touch timer website sync: Wi-Fi, pairing and uploads; heats on the microSD card |
+| `src/cloud.*`, `src/heatstore.*` | Touch timer website sync: Wi-Fi, pairing and uploads; heats kept in flash |
 | `tools/gen-touch-art.py` | Generates `src/touch/touch_art.h` (the splash mark, wordmark and top-bar lockup) from lapdog-web's brand kit: rerun it when the brand changes |
 | `boards/c5_touch/` | The touch board's component: LVGL, display and touch drivers (only in `env:c5_touch`) |
 | `src/lcd147/`, `boards/c5_lcd147/` | The 1.47" board's screen (`screen.cpp`, fonts and artwork in the generated `art.h`) and its component (only in `env:c5_lcd147`) |
