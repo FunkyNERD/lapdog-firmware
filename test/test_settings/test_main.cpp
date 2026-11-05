@@ -2,7 +2,6 @@
 #include <unity.h>
 #include <string>
 
-#include "sound_choice.h"
 #include "timer_settings.h"
 
 namespace ts = timer_settings;
@@ -126,19 +125,9 @@ void test_false_read_protection()
     TEST_ASSERT_EQUAL_STRING("off", value(s, "park").c_str());
 }
 
-void test_sound_names()
-{
-    // Every choice parses from its own console name; unknown names don't.
-    for (int i = 0; i < sound::CHOICES; i++) TEST_ASSERT_EQUAL_INT(i, sound::parse(sound::NAMES[i]));
-    TEST_ASSERT_EQUAL_INT(sound::BARK, sound::DEFAULT_CHOICE);
-    TEST_ASSERT_EQUAL_INT(-1, sound::parse("woof"));
-    TEST_ASSERT_EQUAL_INT(-1, sound::parse(""));
-}
-
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_sound_names);
     RUN_TEST(test_defaults);
     RUN_TEST(test_every_key_roundtrips);
     RUN_TEST(test_channel_and_freq);

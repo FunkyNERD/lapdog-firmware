@@ -21,15 +21,4 @@ uint16_t nextHeat();
 void setNextHeat(uint16_t heat); // persisted immediately
 void setNextHeatUnsaved(uint16_t heat); // persisted by the next save()
 
-// The touch timer's lap sound. Kept apart from the Settings blob (a new field would
-// change its size and reset every saved setting): their own NVS keys, written by
-// save() with the rest.
-struct Sound
-{
-    uint8_t choice;  // sound::Choice
-    uint8_t volume;  // percent
-    bool cues;       // a tone for GO and for the finish in a race
-};
-Sound &sound();
-
 } // namespace settings

@@ -6,7 +6,6 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "sound_choice.h"
 
 static const char *TAG = "settings";
 static const char *NVS_NS = "lapdog";
@@ -15,11 +14,9 @@ static const uint32_t SETTINGS_VERSION = 4; // bump when the struct layout chang
 static Settings current;
 static uint16_t heat = 1;
 static bool heatUnsaved = false;
-static settings::Sound snd = {sound::DEFAULT_CHOICE, sound::DEFAULT_VOLUME, false};
 
 void settings::resetDefaults()
 {
-    snd = {sound::DEFAULT_CHOICE, sound::DEFAULT_VOLUME, false};
     current = timer_settings::defaults(
         cfg::DEFAULT_FREQ_MHZ, {cfg::DEFAULT_EMA_ALPHA, cfg::DEFAULT_ENTER_DB, cfg::DEFAULT_EXIT_DB, cfg::DEFAULT_MIN_LAP_MS,
                                        cfg::DEFAULT_MAX_PEAK_MS});
@@ -38,10 +35,6 @@ void settings::begin()
     resetDefaults();
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
-    uint8_t u8;
-    if (nvs_get_u8(h, "snd", &u8) == ESP_OK && u8 < sound::CHOICES) snd.choice = u8;
-    if (nvs_get_u8(h, "vol", &u8) == ESP_OK && u8 <= 100) snd.volume = u8;
-    if (nvs_get_u8(h, "cue", &u8) == ESP_OK) snd.cues = u8 != 0;
     uint32_t version = 0;
     size_t len = sizeof(current);
     if (nvs_get_u32(h, "ver", &version) == ESP_OK && (version == SETTINGS_VERSION || version == 3) &&
@@ -58,16 +51,12 @@ void settings::begin()
 }
 
 Settings &settings::get() { return current; }
-settings::Sound &settings::sound() { return snd; }
 
 bool settings::save()
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
     if (heatUnsaved && nvs_set_u16(h, "heat", heat) == ESP_OK) heatUnsaved = false;
-    nvs_set_u8(h, "snd", snd.choice);
-    nvs_set_u8(h, "vol", snd.volume);
-    nvs_set_u8(h, "cue", snd.cues);
     bool ok = nvs_set_u32(h, "ver", SETTINGS_VERSION) == ESP_OK &&
               nvs_set_blob(h, "cfg", &current, sizeof(current)) == ESP_OK && nvs_commit(h) == ESP_OK;
     nvs_close(h);

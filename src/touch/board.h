@@ -36,9 +36,6 @@ void unlock();
 void lockBus();
 void unlockBus();
 
-// The shared I2C master bus (an i2c_master_bus_handle_t), for the audio codec; null if it didn't come up.
-void *i2cBusHandle();
-
 // The AXP2101 power-management chip (I2C address 0x34) on the shared bus. False if it
 // isn't there or doesn't answer.
 bool pmuRead(uint8_t reg, uint8_t *buf, size_t len);

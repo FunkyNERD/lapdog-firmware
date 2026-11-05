@@ -30,7 +30,6 @@
 #include "power.h"
 #include "race.h"
 #include "settings.h"
-#include "sound.h"
 #include "splash.h"
 #include "theme.h"
 
@@ -246,7 +245,6 @@ enum Screen
     S_RADIO,
     S_MESSAGES,
     S_RACE,
-    S_SOUND,
     S_HISTORY,
     S_HEAT,
     S_KEYBOARD,
@@ -794,7 +792,7 @@ static void refreshLive()
 
 // --- Settings grid ------------------------------------------------------------------------
 
-static constexpr int TILES = 8;
+static constexpr int TILES = 7;
 
 static struct
 {
@@ -818,7 +816,7 @@ static void buildSettings()
         {LV_SYMBOL_WIFI, "Channel", S_CHANNEL},           {LV_SYMBOL_EYE_OPEN, "Sensitivity", S_SENSITIVITY},
         {LV_SYMBOL_WARNING, "False reads", S_FALSE_READS}, {LV_SYMBOL_BLUETOOTH, "Radio output", S_RADIO},
         {LV_SYMBOL_EDIT, "Race messages", S_MESSAGES},    {LV_SYMBOL_LOOP, "Race defaults", S_RACE},
-        {LV_SYMBOL_VOLUME_MAX, "Sound", S_SOUND},         {LV_SYMBOL_UPLOAD, "Website sync", S_SYNC},
+        {LV_SYMBOL_UPLOAD, "Website sync", S_SYNC},
     };
     lv_obj_t *list = lv_obj_create(s);
     lv_obj_remove_style_all(list);
@@ -872,14 +870,11 @@ static void refreshSettings()
     fmtMinutes(s.raceTimeS, t, sizeof(t));
     if (s.raceLimit == race::LIMIT_LAPS) lv_label_set_text_fmt(grid.value[5], "%u laps - %s", s.raceLaps, t);
     else lv_label_set_text_fmt(grid.value[5], "%s race - %u laps", t, s.raceLaps);
-    const settings::Sound &sn = settings::sound();
-    if (sn.choice == sound::OFF || sn.volume == 0) lv_label_set_text(grid.value[6], "Off");
-    else lv_label_set_text_fmt(grid.value[6], "%s - %u%%", sound::LABELS[sn.choice], sn.volume);
     int waiting = cloud::pending();
-    if (!cloud::paired()) lv_label_set_text(grid.value[7], "Not paired");
-    else if (!cloud::storeReady()) lv_label_set_text(grid.value[7], "No storage");
-    else if (waiting > 0) lv_label_set_text_fmt(grid.value[7], "%d heat%s waiting", waiting, waiting == 1 ? "" : "s");
-    else lv_label_set_text(grid.value[7], "Up to date");
+    if (!cloud::paired()) lv_label_set_text(grid.value[6], "Not paired");
+    else if (!cloud::storeReady()) lv_label_set_text(grid.value[6], "No storage");
+    else if (waiting > 0) lv_label_set_text_fmt(grid.value[6], "%d heat%s waiting", waiting, waiting == 1 ? "" : "s");
+    else lv_label_set_text(grid.value[6], "Up to date");
     // The battery has no tile: it's only a reading, here beside the firmware version.
     power::State pw = power::state();
     char bat[40];
@@ -1298,72 +1293,6 @@ static void keyboardChanged(lv_event_t *)
     }
     lv_label_set_text_fmt(keys.count, "%u/%u", (unsigned)strlen(lv_textarea_get_text(keys.area)),
                           (unsigned)race::EVENT_MAX);
-}
-
-// --- Sound --------------------------------------------------------------------------------
-// The lap sound, from the board's speaker (sound.h): the same seven choices as the app's Lap
-// sound page, a tap to pick one and a play button to hear it, then the volume.
-
-static struct
-{
-    lv_obj_t *tile[sound::CHOICES];
-} soundPage;
-
-static int getVolume() { return settings::sound().volume; }
-static void setVolume(int v) { settings::sound().volume = (uint8_t)v; }
-static void fmtPercent(int v, char *out, size_t len) { snprintf(out, len, "%d%%", v); }
-static Stepper volumeStep = {nullptr, getVolume, setVolume, 10, 0, 100, fmtPercent};
-static bool getCues() { return settings::sound().cues; }
-static void setCues(bool on) { settings::sound().cues = on; }
-static Toggle cuesToggle = {nullptr, getCues, setCues};
-
-static void pickSound(lv_event_t *e)
-{
-    uint8_t c = (uint8_t)(intptr_t)lv_event_get_user_data(e);
-    settings::sound().choice = c;
-    save();
-    sound::preview(c);
-    refresh(S_SOUND);
-}
-
-static void playSound(lv_event_t *e) { sound::preview((uint8_t)(intptr_t)lv_event_get_user_data(e)); }
-
-static void buildSound()
-{
-    lv_obj_t *s = screens[S_SOUND] = screen();
-    header(s, LV_SYMBOL_VOLUME_MAX, "Lap sound", S_SETTINGS);
-    for (int i = 0; i < sound::CHOICES; i++)
-    {
-        int x = 16 + (i % 2) * 232, y = 60 + (i / 2) * 46;
-        lv_obj_t *t = button(s, x, y, 216, 40, col::SURFACE, col::LINE, 12, pickSound, (void *)(intptr_t)i);
-        lv_obj_t *name = text(t, &lv_font_montserrat_16, col::TEXT, sound::LABELS[i]);
-        lv_obj_set_pos(name, 14, 10);
-        soundPage.tile[i] = t;
-        if (i != sound::OFF)
-        {
-            lv_obj_t *play = button(t, 168, 3, 44, 34, col::BG, col::LINE, 9, nullptr);
-            lv_obj_add_event_cb(play, playSound, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-            lv_obj_center(text(play, &lv_font_montserrat_16, col::ACCENT, LV_SYMBOL_PLAY));
-        }
-    }
-    // The eighth slot: tones for GO and the finish, off by default.
-    lv_obj_t *cues = panel(s, 248, 198, 216, 40, col::SURFACE, col::LINE, 12);
-    lv_obj_t *cl = text(cues, &lv_font_montserrat_14, col::TEXT, "GO and finish tones");
-    lv_obj_set_pos(cl, 12, 11);
-    toggle(cues, 152, 5, &cuesToggle);
-    lv_obj_set_width(cl, 136);
-    lv_label_set_long_mode(cl, LV_LABEL_LONG_DOT);
-    lv_obj_t *card = panel(s, 16, 246, 448, 64, col::SURFACE, col::LINE, 16);
-    rowTitle(card, 6, "Volume", "Plays on every counted lap");
-    stepper(card, 262, 10, &volumeStep);
-}
-
-static void refreshSound()
-{
-    const settings::Sound &sn = settings::sound();
-    for (int i = 0; i < sound::CHOICES; i++) setSelected(soundPage.tile[i], i == sn.choice);
-    stepperRefresh(&volumeStep);
-    toggleRefresh(&cuesToggle);
 }
 
 static void buildKeyboard()
@@ -2145,7 +2074,6 @@ static void refresh(Screen s)
     case S_RADIO: refreshRadio(); break;
     case S_MESSAGES: refreshMessages(); break;
     case S_RACE: refreshRace(); break;
-    case S_SOUND: refreshSound(); break;
     case S_HISTORY: refreshHistory(); break;
     case S_HEAT: refreshHeat(); break;
     case S_KEYBOARD: refreshKeyboard(); break;
@@ -2217,7 +2145,7 @@ void display::begin()
     // One screen at a time, letting go of LVGL in between: building them all takes
     // ~0.4 s, and the splash keeps barking meanwhile.
     void (*const builders[])() = {buildIdle,  buildLive,  buildSettings, buildChannel, buildSensitivity,
-                                  buildFalseReads, buildRadio, buildMessages, buildRace, buildSound, buildHistory, buildHeat, buildKeyboard,
+                                  buildFalseReads, buildRadio, buildMessages, buildRace, buildHistory, buildHeat, buildKeyboard,
                                   buildSync, buildWifi, buildWifiKeys, buildPair};
     for (auto build : builders)
     {

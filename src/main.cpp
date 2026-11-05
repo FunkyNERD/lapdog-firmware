@@ -25,7 +25,6 @@
 #include "race.h"
 #include "sdr.h"
 #include "settings.h"
-#include "sound.h"
 #include "vrxc_msp.h"
 
 static const char *TAG = "lapdog";
@@ -61,7 +60,6 @@ public:
     void frame(const lapframe::Frame &f) override
     {
         display::frame(f);
-        sound::frame(f); // the lap sound (touch timer)
         cloud::frame(f); // finished heats to the flash store, for website sync
         outputs::sink().frame(f);
     }

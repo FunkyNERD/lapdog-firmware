@@ -6,19 +6,10 @@ if(IDF_TARGET STREQUAL "esp32c5")
     list(APPEND app_sources ${CMAKE_SOURCE_DIR}/src/esp_sdr/esp_sdr_c5.c)
 endif()
 
-# The lap sounds (touch build only): 22.05 kHz 16-bit mono WAVs, linked into flash.
-set(sound_files "")
-if(LAPDOG_TOUCH)
-    foreach(n lap_bark lap_tone lap_ding lap_bell lap_chirp lap_double_beep)
-        list(APPEND sound_files "touch/sounds/${n}.wav")
-    endforeach()
-endif()
-
 # No REQUIRES: like an IDF "main" component, this one sees every component in
 # the build (lapdog_touch too, when LAPDOG_TOUCH adds it).
 idf_component_register(SRCS ${app_sources}
-                       INCLUDE_DIRS "../include"
-                       EMBED_FILES ${sound_files})
+                       INCLUDE_DIRS "../include")
 
 if(LAPDOG_TOUCH)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE LAPDOG_TOUCH=1)

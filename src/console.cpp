@@ -17,40 +17,6 @@
 #include "freertos/task.h"
 #include "sdr.h"
 #include "settings.h"
-#include "sound.h"
-
-#if LAPDOG_TOUCH
-// The touch timer's speaker: "set sound bark|tone|ding|bell|chirp|double|off", "set volume 0-100",
-// "set cues on|off" (a tone for GO and the finish). "sound test" plays the current choice.
-static bool setSound(const char *key, const char *val)
-{
-    settings::Sound &sn = settings::sound();
-    if (!strcmp(key, "sound"))
-    {
-        if (!strcmp(val, "test")) return sound::preview(sn.choice), true;
-        int c = sound::parse(val);
-        if (c < 0) return false;
-        sn.choice = (uint8_t)c;
-        sound::preview(sn.choice);
-        return true;
-    }
-    if (!strcmp(key, "volume"))
-    {
-        char *end;
-        long n = strtol(val, &end, 10);
-        if (!*val || *end || n < 0 || n > 100) return false;
-        sn.volume = (uint8_t)n;
-        sound::preview(sn.choice);
-        return true;
-    }
-    if (!strcmp(val, "on") || !strcmp(val, "1")) sn.cues = true;
-    else if (!strcmp(val, "off") || !strcmp(val, "0")) sn.cues = false;
-    else return false;
-    return true;
-}
-#else
-static bool setSound(const char *, const char *) { return false; }
-#endif
 
 static void printSettings()
 {
@@ -59,10 +25,6 @@ static void printSettings()
     for (const char *key : timer_settings::KEYS)
         if (timer_settings::get(s, key, v, sizeof(v))) printf("S:%s=%s\n", key, v);
     printf("S:heat=%u\n", settings::nextHeat());
-#if LAPDOG_TOUCH
-    printf("S:sound=%s\nS:volume=%u\nS:cues=%s\n", sound::NAMES[settings::sound().choice], settings::sound().volume,
-           settings::sound().cues ? "on" : "off");
-#endif
     const char *state = !app::armed() ? "idle" : app::stage() == race::PRACTICE_RUN ? "practice" : "race";
     printf("S:state=%s\n", state);
     printf("S:fw=%s\n", FIRMWARE_VERSION);
@@ -258,8 +220,6 @@ static void handleLine(char *line)
             ok = n >= 1 && n <= 65535;
             if (ok) settings::setNextHeat((uint16_t)n);
         }
-        else if (key && (!strcmp(key, "sound") || !strcmp(key, "volume") || !strcmp(key, "cues")))
-            ok = setSound(key, val);
         else ok = timer_settings::set(settings::get(), key, val);
     }
     else if (!strcmp(cmd, "save")) ok = settings::save();
