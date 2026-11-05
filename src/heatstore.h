@@ -48,12 +48,39 @@ void clearRaceNos();
 // Move every sent heat back to out (pairing with another account sends them all).
 void resend();
 
+// --- History (the touch screen's list of heats) ---------------------------------------------
+// Every saved heat, waiting or uploaded, newest first. Reading one means opening its file,
+// so the list comes a page at a time.
+
+struct Entry
+{
+    uint32_t id;
+    bool sent;
+    uint16_t heat;
+    uint8_t mode; // race::Mode
+    bool finished;
+    uint16_t laps; // timed laps
+    uint32_t bestMs, avgMs; // 0 when there are no laps
+    int64_t startedAt; // Unix seconds, 0 = the clock wasn't set
+    char prefix[race::PREFIX_MAX + 1];
+};
+
+// Up to max entries older than beforeId (0 = from the newest). Returns how many.
+int list(uint32_t beforeId, Entry *out, int max);
+// A heat from either folder.
+bool loadAny(uint32_t id, heatlog::Heat &h);
+bool remove(uint32_t id);
+// Deletes every heat, uploaded or not (the screen says how many were still waiting).
+void removeAll();
+
 struct Usage
 {
     uint64_t totalBytes, freeBytes;
     int waiting, sent; // heats not uploaded yet, uploaded
 };
 Usage usage(); // zeros before begin()
+// When free space is under 10 %, a save first deletes the oldest uploaded heats (never one
+// that is still waiting) until 15 % is free.
 // Free space is low enough that the screen should say so (under 10 %).
 bool nearlyFull();
 

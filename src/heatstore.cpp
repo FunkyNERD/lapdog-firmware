@@ -199,8 +199,36 @@ bool heatstore::nearlyFull()
     return u.totalBytes && u.freeBytes * 10 < u.totalBytes;
 }
 
+// Makes room by deleting the oldest uploaded heats, in tens, until 15 % is free.
+static void pruneImpl()
+{
+    auto freeEnough = [] {
+        uint64_t total = 0, fre = 0;
+        esp_vfs_fat_info(STORE, &total, &fre);
+        return total == 0 || fre * 100 >= total * 15;
+    };
+    uint64_t total = 0, fre = 0;
+    esp_vfs_fat_info(STORE, &total, &fre);
+    if (!total || fre * 10 >= total) return;
+    std::vector<uint32_t> ids;
+    eachId(SENT, [&](uint32_t id) { ids.push_back(id); });
+    std::sort(ids.begin(), ids.end());
+    size_t n = 0;
+    while (n < ids.size() && !freeEnough())
+    {
+        for (int i = 0; i < 10 && n < ids.size(); i++, n++)
+        {
+            char p[40];
+            path(p, sizeof(p), SENT, ids[n]);
+            unlink(p);
+        }
+    }
+    if (n) ESP_LOGW(TAG, "flash nearly full: deleted the %u oldest uploaded heats", (unsigned)n);
+}
+
 static bool saveImpl(const heatlog::Heat &h)
 {
+    pruneImpl();
     char p[40], tmp[40];
     uint32_t id = nextId++;
     path(p, sizeof(p), OUT, id);
@@ -264,6 +292,115 @@ bool heatstore::load(uint32_t id, heatlog::Heat &h)
         fclose(f);
     });
     return ok;
+}
+
+// --- History --------------------------------------------------------------------------------
+
+// A heat read into PSRAM: 1.7 KB is too much for the store task's stack.
+static heatlog::Heat *scratch()
+{
+    static heatlog::Heat *p = nullptr;
+    if (!p) p = static_cast<heatlog::Heat *>(heap_caps_malloc(sizeof(heatlog::Heat), MALLOC_CAP_SPIRAM));
+    return p;
+}
+
+static bool loadFrom(const char *dir, uint32_t id, heatlog::Heat &h)
+{
+    char p[40];
+    path(p, sizeof(p), dir, id);
+    FILE *f = nullptr;
+    Header hd;
+    if (!readHeader(p, hd, &f)) return false;
+    bool ok = fread(&h, sizeof(h), 1, f) == 1;
+    fclose(f);
+    return ok;
+}
+
+int heatstore::list(uint32_t beforeId, Entry *out, int max)
+{
+    if (!mounted) return 0;
+    int n = 0;
+    onStore([&] {
+        heatlog::Heat *h = scratch();
+        if (!h) return;
+        struct Id
+        {
+            uint32_t id;
+            bool sent;
+        };
+        std::vector<Id> ids;
+        auto add = [&](bool sent) {
+            eachId(sent ? SENT : OUT, [&](uint32_t id) {
+                if (!beforeId || id < beforeId) ids.push_back({id, sent});
+            });
+        };
+        add(false);
+        add(true);
+        std::sort(ids.begin(), ids.end(), [](const Id &a, const Id &b) { return a.id > b.id; });
+        for (const Id &i : ids)
+        {
+            if (n >= max) break;
+            if (!loadFrom(i.sent ? SENT : OUT, i.id, *h)) continue; // another version's file: skipped
+            Entry &e = out[n++];
+            e = {};
+            e.id = i.id;
+            e.sent = i.sent;
+            e.heat = h->heat;
+            e.mode = h->mode;
+            e.finished = h->finished;
+            e.laps = h->lapCount;
+            uint64_t sum = 0;
+            for (int k = 0; k < h->lapCount; k++)
+            {
+                if (!e.bestMs || h->laps[k].ms < e.bestMs) e.bestMs = h->laps[k].ms;
+                sum += h->laps[k].ms;
+            }
+            e.avgMs = h->lapCount ? (uint32_t)(sum / h->lapCount) : 0;
+            e.startedAt = h->startedAt;
+            memcpy(e.prefix, h->prefix, sizeof(e.prefix));
+        }
+    });
+    return n;
+}
+
+bool heatstore::loadAny(uint32_t id, heatlog::Heat &h)
+{
+    bool ok = false;
+    onStore([&] { ok = loadFrom(OUT, id, h) || loadFrom(SENT, id, h); });
+    return ok;
+}
+
+bool heatstore::remove(uint32_t id)
+{
+    bool ok = false;
+    onStore([&] {
+        char p[40];
+        path(p, sizeof(p), OUT, id);
+        ok = unlink(p) == 0;
+        path(p, sizeof(p), SENT, id);
+        ok = unlink(p) == 0 || ok;
+        refreshUsage();
+    });
+    return ok;
+}
+
+void heatstore::removeAll()
+{
+    if (!mounted) return;
+    onStore([&] {
+        for (const char *dir : {OUT, SENT})
+        {
+            std::vector<uint32_t> ids;
+            eachId(dir, [&](uint32_t id) { ids.push_back(id); });
+            for (uint32_t id : ids)
+            {
+                char p[40];
+                path(p, sizeof(p), dir, id);
+                unlink(p);
+            }
+        }
+        refreshUsage();
+    });
 }
 
 static bool setRaceNoImpl(uint32_t id, int32_t raceNo)
@@ -345,6 +482,10 @@ bool heatstore::save(const heatlog::Heat &) { return false; }
 int heatstore::pending(Pending *, int) { return 0; }
 int heatstore::pendingCount() { return 0; }
 bool heatstore::load(uint32_t, heatlog::Heat &) { return false; }
+int heatstore::list(uint32_t, Entry *, int) { return 0; }
+bool heatstore::loadAny(uint32_t, heatlog::Heat &) { return false; }
+bool heatstore::remove(uint32_t) { return false; }
+void heatstore::removeAll() {}
 bool heatstore::setRaceNo(uint32_t, int32_t) { return false; }
 bool heatstore::markSent(uint32_t) { return false; }
 void heatstore::clearRaceNos() {}

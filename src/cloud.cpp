@@ -171,7 +171,7 @@ bool cloud::paired()
 const char *cloud::deviceName() { return state ? state->prefs.device : ""; }
 const char *cloud::pilotName() { return state ? state->prefs.pilot : ""; }
 bool cloud::storeReady() { return heatstore::ready(); }
-int cloud::pending() { return pendingN; }
+int cloud::pending() { return heatstore::ready() ? heatstore::pendingCount() : pendingN; } // never stale after a delete
 
 int cloud::networkCount()
 {

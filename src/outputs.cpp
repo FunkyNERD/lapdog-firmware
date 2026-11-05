@@ -369,10 +369,16 @@ private:
     }
 };
 
-DeviceSink deviceSink;
+// On the heap, not static: its ~1.2 KB of buffers in .bss would push the static data into the
+// SRAM bank the SDR owns (sram_guard.ld). Built on first use, which is before the first frame.
+DeviceSink &deviceSink()
+{
+    static DeviceSink *p = new DeviceSink();
+    return *p;
+}
 
 } // namespace
 
-race::Sink &outputs::sink() { return deviceSink; }
+race::Sink &outputs::sink() { return deviceSink(); }
 
-void outputs::tick(uint32_t nowMs) { deviceSink.tick(nowMs); }
+void outputs::tick(uint32_t nowMs) { deviceSink().tick(nowMs); }

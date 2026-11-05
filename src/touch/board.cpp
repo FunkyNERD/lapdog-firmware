@@ -31,8 +31,8 @@ static constexpr gpio_num_t PIN_TOUCH_INT = GPIO_NUM_3; // unused: touch is poll
 static constexpr spi_host_device_t LCD_SPI = SPI2_HOST;
 static constexpr uint32_t LCD_PCLK_HZ = 60 * 1000 * 1000;
 // Draw buffers: the SPI DMA can't read PSRAM (it would need an internal copy of
-// the whole buffer per flush), so two small internal DMA buffers of 16 lines.
-static constexpr int DRAW_LINES = 16;
+// the whole buffer per flush), so two small internal DMA buffers of 12 lines (16 until the speaker's I2S buffers needed the RAM).
+static constexpr int DRAW_LINES = 12;
 
 // The panel is 320x480 portrait. Turned to landscape; if the picture or the
 // touch comes out mirrored on a board, these are the knobs.
@@ -64,6 +64,8 @@ static i2c_master_bus_handle_t i2cBus()
     if (i2c_new_master_bus(&cfg, &bus) != ESP_OK) bus = nullptr;
     return bus;
 }
+
+void *board::i2cBusHandle() { return i2cBus(); }
 
 // The AXP2101 power-management chip, on the same I2C bus (power.cpp reads it).
 static i2c_master_dev_handle_t pmu = nullptr;

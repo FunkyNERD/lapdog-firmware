@@ -13,6 +13,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "app.h"
 #include "art.h"
@@ -21,6 +22,7 @@
 #include "cloud.h"
 #include "config.h"
 #include "display.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -28,6 +30,7 @@
 #include "power.h"
 #include "race.h"
 #include "settings.h"
+#include "sound.h"
 #include "splash.h"
 #include "theme.h"
 
@@ -243,6 +246,9 @@ enum Screen
     S_RADIO,
     S_MESSAGES,
     S_RACE,
+    S_SOUND,
+    S_HISTORY,
+    S_HEAT,
     S_KEYBOARD,
     S_SYNC,
     S_WIFI,
@@ -373,8 +379,8 @@ static void toggleRefresh(Toggle *t)
 }
 
 // --- Battery ------------------------------------------------------------------------------
-// A level symbol in a pill in the top bar of the idle and armed screens (the percentage is
-// on the Settings tile), a bolt beside it while charging, the USB symbol when there's no
+// The live screen shows a level symbol in a pill (the idle screen has its own icon, below;
+// the percentage is in the Settings header), a bolt beside it while charging, the USB symbol when there's no
 // battery. Red below 15 %. Read from the
 // AXP2101 (power.h) every few seconds by tick().
 
@@ -407,13 +413,71 @@ static void showBattery(lv_obj_t *label, uint32_t normal)
     else lv_obj_add_flag(pill, LV_OBJ_FLAG_HIDDEN);
 }
 
+// The idle screen's battery: a vertical icon drawn from plain shapes (body, terminal, a fill
+// that rises with the level), no pill. A bolt over it while charging; the USB symbol in its
+// place when there's no battery. Red below 15 %.
+struct BatteryIcon
+{
+    lv_obj_t *root, *fill, *bolt, *usb, *body;
+};
+
+static constexpr int BAT_W = 12, BAT_H = 24, BAT_INNER_W = 8, BAT_INNER_H = 18;
+
+static BatteryIcon batteryIcon(lv_obj_t *parent, int x, int y)
+{
+    BatteryIcon b = {};
+    b.root = lv_obj_create(parent);
+    lv_obj_remove_style_all(b.root);
+    lv_obj_set_pos(b.root, x, y);
+    lv_obj_set_size(b.root, BAT_W, BAT_H);
+    lv_obj_remove_flag(b.root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(b.root, LV_OBJ_FLAG_CLICKABLE);
+    panel(b.root, 4, 0, 4, 2, col::SELECTED_TEXT, 0, 1); // the terminal
+    b.body = panel(b.root, 0, 2, BAT_W, BAT_H - 2, col::BG, col::SELECTED_TEXT, 3);
+    lv_obj_set_style_border_width(b.body, 2, 0);
+    b.fill = panel(b.body, 0, 0, BAT_INNER_W, BAT_INNER_H, col::SELECTED_TEXT, 0, 2);
+    b.bolt = text(b.root, &lv_font_montserrat_12, col::BG, LV_SYMBOL_CHARGE);
+    lv_obj_align(b.bolt, LV_ALIGN_CENTER, 0, 1);
+    b.usb = text(b.root, &lv_font_montserrat_16, col::SELECTED_TEXT, LV_SYMBOL_USB);
+    lv_obj_center(b.usb);
+    return b;
+}
+
+static void showBatteryIcon(const BatteryIcon &b)
+{
+    power::State p = power::state();
+    bool has = p.valid && p.battery && p.percent >= 0;
+    bool usb = !has && p.valid && p.vbus;
+    lv_obj_set_flag(b.body, LV_OBJ_FLAG_HIDDEN, !has);
+    lv_obj_set_flag(b.bolt, LV_OBJ_FLAG_HIDDEN, !(has && p.charging));
+    lv_obj_set_flag(b.usb, LV_OBJ_FLAG_HIDDEN, !usb);
+    // The terminal is the root's first child.
+    lv_obj_set_flag(lv_obj_get_child(b.root, 0), LV_OBJ_FLAG_HIDDEN, !has);
+    if (!has) return;
+    uint32_t color = p.percent < LOW_BATTERY_PERCENT && !p.charging ? col::ALERT : col::SELECTED_TEXT;
+    int h = BAT_INNER_H * p.percent / 100;
+    if (h < 2) h = 2;
+    if (h > BAT_INNER_H) h = BAT_INNER_H;
+    lv_obj_set_size(b.fill, BAT_INNER_W, h);
+    lv_obj_set_y(b.fill, BAT_INNER_H - h);
+    lv_obj_set_style_bg_color(b.fill, lv_color_hex(color), 0);
+    lv_obj_set_style_border_color(b.body, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_color(lv_obj_get_child(b.root, 0), lv_color_hex(color), 0);
+    // Dark bolt on a fill that reaches it, light on the dark body.
+    lv_obj_set_style_text_color(b.bolt, lv_color_hex(p.percent >= 45 ? col::BG : col::TEXT), 0);
+}
+
 // --- Idle -------------------------------------------------------------------------------
 
 static struct
 {
-    lv_obj_t *chan, *radio, *event, *heat, *practice, *race, *raceLabel, *armHint, *battery;
-    lv_obj_t *lastTitle, *lastLaps, *lastBest, *lastAvg;
+    lv_obj_t *chan, *radio, *event, *heat, *practice, *race, *raceLabel, *armHint;
+    BatteryIcon battery;
+    lv_obj_t *lastTitle, *lastLaps, *lastBest, *lastAvg, *histCount;
 } idle;
+
+static void openHistory(lv_event_t *);
+static void openNewest(lv_event_t *);
 
 static void pickMode(lv_event_t *e)
 {
@@ -466,10 +530,10 @@ static void buildIdle()
     lv_obj_t *logo = lv_image_create(s);
     lv_image_set_src(logo, &art::lockup);
     lv_obj_set_pos(logo, 16, 12); // level with the chips
-    chip(s, &idle.chan, 196, 110);
-    chip(s, &idle.radio, 312, 60);
-    chip(s, &idle.battery, 376, 48); // between the radio pill and the cog
-    lv_obj_t *gear = button(s, 428, 4, 48, 48, col::BG, 0, 24, goTo, (void *)(intptr_t)S_SETTINGS);
+    chip(s, &idle.chan, 216, 110);
+    chip(s, &idle.radio, 332, 60);
+    idle.battery = batteryIcon(s, 402, 15); // close beside the radio pill and the cog
+    lv_obj_t *gear = button(s, 420, 4, 48, 48, col::BG, 0, 24, goTo, (void *)(intptr_t)S_SETTINGS);
     lv_obj_center(text(gear, &lv_font_montserrat_24, col::TEXT, LV_SYMBOL_SETTINGS));
 
     idle.event = text(s, &lv_font_montserrat_12, col::MUTED, "");
@@ -488,7 +552,18 @@ static void buildIdle()
     idle.raceLabel = text(idle.race, &lv_font_montserrat_16, col::TEXT, "Race");
     lv_obj_center(idle.raceLabel);
 
+    // The finished heats the board has kept (history), in the free band above the last session.
+    lv_obj_t *hist = button(s, 16, 194, 284, 40, col::SURFACE, col::LINE, 12, openHistory);
+    lv_obj_t *hi = text(hist, &lv_font_montserrat_16, col::ACCENT, LV_SYMBOL_LIST);
+    lv_obj_set_pos(hi, 14, 10);
+    lv_obj_t *ht = text(hist, &lv_font_montserrat_16, col::TEXT, "History");
+    lv_obj_set_pos(ht, 44, 10);
+    idle.histCount = text(hist, &lv_font_montserrat_12, col::MUTED, "");
+    lv_obj_align(idle.histCount, LV_ALIGN_RIGHT_MID, -14, 0);
+
     lv_obj_t *card = panel(s, 16, 240, 284, 64, col::SURFACE, col::LINE, 12);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE); // the newest heat, with its laps
+    lv_obj_add_event_cb(card, openNewest, LV_EVENT_CLICKED, nullptr);
     const char *titles[] = {"", "Best", "Average"};
     lv_obj_t **values[] = {&idle.lastLaps, &idle.lastBest, &idle.lastAvg};
     for (int i = 0; i < 3; i++)
@@ -522,7 +597,7 @@ static void refreshIdle()
 {
     const Settings &s = settings::get();
     refreshChannelChip(idle.chan);
-    showBattery(idle.battery, col::SELECTED_TEXT);
+    showBatteryIcon(idle.battery);
     char r[24] = "";
     if (s.links & LINK_BLE) strcat(r, LV_SYMBOL_BLUETOOTH);
     if (s.links & LINK_ESPNOW) strcat(r, s.links & LINK_BLE ? " " LV_SYMBOL_WIFI : LV_SYMBOL_WIFI);
@@ -559,6 +634,10 @@ static void refreshIdle()
     power::State pw = power::state();
     bool veryLow = pw.valid && pw.battery && pw.percent >= 0 && pw.percent < VERY_LOW_BATTERY_PERCENT && !pw.charging;
     lv_label_set_text(idle.armHint, veryLow ? "battery very low: a heat may not last" : cloud::busy() ? "website sync has the radio" : race ? "stage, then GO" : "first pass starts lap 1");
+
+    heatstore::Usage hu = heatstore::usage();
+    if (!heatstore::ready()) lv_label_set_text(idle.histCount, "no storage");
+    else lv_label_set_text_fmt(idle.histCount, "%d heat%s", hu.waiting + hu.sent, hu.waiting + hu.sent == 1 ? "" : "s");
 
     Model m = snapshot();
     char b[16];
@@ -719,31 +798,41 @@ static constexpr int TILES = 8;
 
 static struct
 {
-    lv_obj_t *value[TILES];
+    lv_obj_t *value[TILES], *info;
 } grid;
 
+// A scrolling list of tiles, three to a row: it fits three rows as it is, and takes more
+// tiles by scrolling (a finger drag, with momentum) rather than by running out of screen.
 static void buildSettings()
 {
     lv_obj_t *s = screens[S_SETTINGS] = screen();
     header(s, nullptr, "Settings", S_IDLE);
-    lv_obj_t *fw = text(s, &lv_font_montserrat_12, col::MUTED, "Firmware " FIRMWARE_VERSION " - saved as you change them");
-    lv_obj_align(fw, LV_ALIGN_TOP_RIGHT, -16, 22);
+    grid.info = text(s, &lv_font_montserrat_12, col::MUTED, "");
+    lv_obj_align(grid.info, LV_ALIGN_TOP_RIGHT, -16, 22);
     struct Tile
     {
         const char *icon, *title;
         Screen to;
     };
-    static const Tile tiles[] = {
+    static const Tile tiles[TILES] = {
         {LV_SYMBOL_WIFI, "Channel", S_CHANNEL},           {LV_SYMBOL_EYE_OPEN, "Sensitivity", S_SENSITIVITY},
         {LV_SYMBOL_WARNING, "False reads", S_FALSE_READS}, {LV_SYMBOL_BLUETOOTH, "Radio output", S_RADIO},
         {LV_SYMBOL_EDIT, "Race messages", S_MESSAGES},    {LV_SYMBOL_LOOP, "Race defaults", S_RACE},
-        {LV_SYMBOL_UPLOAD, "Website sync", S_SYNC},       {LV_SYMBOL_CHARGE, "Battery", S_SETTINGS},
+        {LV_SYMBOL_VOLUME_MAX, "Sound", S_SOUND},         {LV_SYMBOL_UPLOAD, "Website sync", S_SYNC},
     };
+    lv_obj_t *list = lv_obj_create(s);
+    lv_obj_remove_style_all(list);
+    lv_obj_set_pos(list, 0, 56);
+    lv_obj_set_size(list, board::WIDTH, board::HEIGHT - 56);
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_pad_bottom(list, 10, 0);
     // Three rows of three: icon and title on top, what it's set to below.
     for (int i = 0; i < TILES; i++)
     {
-        int x = 16 + (i % 3) * 152, y = 60 + (i / 3) * 86;
-        lv_obj_t *t = button(s, x, y, 144, 78, col::SURFACE, col::LINE, 14, goTo, (void *)(intptr_t)tiles[i].to);
+        int x = 16 + (i % 3) * 152, y = 4 + (i / 3) * 86;
+        lv_obj_t *t = button(list, x, y, 144, 78, col::SURFACE, col::LINE, 14, goTo, (void *)(intptr_t)tiles[i].to);
         lv_obj_t *ic = panel(t, 10, 10, 30, 30, col::SELECTED, 0, 9);
         lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_center(text(ic, &lv_font_montserrat_16, col::ACCENT, tiles[i].icon));
@@ -755,7 +844,6 @@ static void buildSettings()
         lv_obj_set_pos(grid.value[i], 10, 52);
         lv_label_set_long_mode(grid.value[i], LV_LABEL_LONG_DOT);
         lv_obj_set_width(grid.value[i], 124);
-        if (i == TILES - 1) lv_obj_remove_flag(t, LV_OBJ_FLAG_CLICKABLE); // the battery tile only reports
     }
 }
 
@@ -784,16 +872,22 @@ static void refreshSettings()
     fmtMinutes(s.raceTimeS, t, sizeof(t));
     if (s.raceLimit == race::LIMIT_LAPS) lv_label_set_text_fmt(grid.value[5], "%u laps - %s", s.raceLaps, t);
     else lv_label_set_text_fmt(grid.value[5], "%s race - %u laps", t, s.raceLaps);
+    const settings::Sound &sn = settings::sound();
+    if (sn.choice == sound::OFF || sn.volume == 0) lv_label_set_text(grid.value[6], "Off");
+    else lv_label_set_text_fmt(grid.value[6], "%s - %u%%", sound::LABELS[sn.choice], sn.volume);
     int waiting = cloud::pending();
-    if (!cloud::paired()) lv_label_set_text(grid.value[6], "Not paired");
-    else if (!cloud::storeReady()) lv_label_set_text(grid.value[6], "No storage");
-    else if (waiting > 0) lv_label_set_text_fmt(grid.value[6], "%d heat%s waiting", waiting, waiting == 1 ? "" : "s");
-    else lv_label_set_text(grid.value[6], "Up to date");
+    if (!cloud::paired()) lv_label_set_text(grid.value[7], "Not paired");
+    else if (!cloud::storeReady()) lv_label_set_text(grid.value[7], "No storage");
+    else if (waiting > 0) lv_label_set_text_fmt(grid.value[7], "%d heat%s waiting", waiting, waiting == 1 ? "" : "s");
+    else lv_label_set_text(grid.value[7], "Up to date");
+    // The battery has no tile: it's only a reading, here beside the firmware version.
     power::State pw = power::state();
-    if (!pw.valid) lv_label_set_text(grid.value[7], "No reading");
-    else if (!pw.battery) lv_label_set_text(grid.value[7], pw.vbus ? "USB power" : "No battery");
-    else if (pw.charging) lv_label_set_text_fmt(grid.value[7], "%d%% - charging", pw.percent);
-    else lv_label_set_text_fmt(grid.value[7], "%d%% - %.2f V", pw.percent, pw.mv / 1000.0f);
+    char bat[40];
+    if (!pw.valid) snprintf(bat, sizeof(bat), "No battery reading");
+    else if (!pw.battery) snprintf(bat, sizeof(bat), pw.vbus ? "USB power" : "No battery");
+    else if (pw.charging) snprintf(bat, sizeof(bat), "Battery %d%% - charging", pw.percent);
+    else snprintf(bat, sizeof(bat), "Battery %d%% - %.2f V", pw.percent, pw.mv / 1000.0f);
+    lv_label_set_text_fmt(grid.info, "%s  -  Firmware " FIRMWARE_VERSION, bat);
 }
 
 // --- Channel ------------------------------------------------------------------------------
@@ -1204,6 +1298,72 @@ static void keyboardChanged(lv_event_t *)
     }
     lv_label_set_text_fmt(keys.count, "%u/%u", (unsigned)strlen(lv_textarea_get_text(keys.area)),
                           (unsigned)race::EVENT_MAX);
+}
+
+// --- Sound --------------------------------------------------------------------------------
+// The lap sound, from the board's speaker (sound.h): the same seven choices as the app's Lap
+// sound page, a tap to pick one and a play button to hear it, then the volume.
+
+static struct
+{
+    lv_obj_t *tile[sound::CHOICES];
+} soundPage;
+
+static int getVolume() { return settings::sound().volume; }
+static void setVolume(int v) { settings::sound().volume = (uint8_t)v; }
+static void fmtPercent(int v, char *out, size_t len) { snprintf(out, len, "%d%%", v); }
+static Stepper volumeStep = {nullptr, getVolume, setVolume, 10, 0, 100, fmtPercent};
+static bool getCues() { return settings::sound().cues; }
+static void setCues(bool on) { settings::sound().cues = on; }
+static Toggle cuesToggle = {nullptr, getCues, setCues};
+
+static void pickSound(lv_event_t *e)
+{
+    uint8_t c = (uint8_t)(intptr_t)lv_event_get_user_data(e);
+    settings::sound().choice = c;
+    save();
+    sound::preview(c);
+    refresh(S_SOUND);
+}
+
+static void playSound(lv_event_t *e) { sound::preview((uint8_t)(intptr_t)lv_event_get_user_data(e)); }
+
+static void buildSound()
+{
+    lv_obj_t *s = screens[S_SOUND] = screen();
+    header(s, LV_SYMBOL_VOLUME_MAX, "Lap sound", S_SETTINGS);
+    for (int i = 0; i < sound::CHOICES; i++)
+    {
+        int x = 16 + (i % 2) * 232, y = 60 + (i / 2) * 46;
+        lv_obj_t *t = button(s, x, y, 216, 40, col::SURFACE, col::LINE, 12, pickSound, (void *)(intptr_t)i);
+        lv_obj_t *name = text(t, &lv_font_montserrat_16, col::TEXT, sound::LABELS[i]);
+        lv_obj_set_pos(name, 14, 10);
+        soundPage.tile[i] = t;
+        if (i != sound::OFF)
+        {
+            lv_obj_t *play = button(t, 168, 3, 44, 34, col::BG, col::LINE, 9, nullptr);
+            lv_obj_add_event_cb(play, playSound, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+            lv_obj_center(text(play, &lv_font_montserrat_16, col::ACCENT, LV_SYMBOL_PLAY));
+        }
+    }
+    // The eighth slot: tones for GO and the finish, off by default.
+    lv_obj_t *cues = panel(s, 248, 198, 216, 40, col::SURFACE, col::LINE, 12);
+    lv_obj_t *cl = text(cues, &lv_font_montserrat_14, col::TEXT, "GO and finish tones");
+    lv_obj_set_pos(cl, 12, 11);
+    toggle(cues, 152, 5, &cuesToggle);
+    lv_obj_set_width(cl, 136);
+    lv_label_set_long_mode(cl, LV_LABEL_LONG_DOT);
+    lv_obj_t *card = panel(s, 16, 246, 448, 64, col::SURFACE, col::LINE, 16);
+    rowTitle(card, 6, "Volume", "Plays on every counted lap");
+    stepper(card, 262, 10, &volumeStep);
+}
+
+static void refreshSound()
+{
+    const settings::Sound &sn = settings::sound();
+    for (int i = 0; i < sound::CHOICES; i++) setSelected(soundPage.tile[i], i == sn.choice);
+    stepperRefresh(&volumeStep);
+    toggleRefresh(&cuesToggle);
 }
 
 static void buildKeyboard()
@@ -1619,6 +1779,357 @@ static void refreshPair()
     pairChanged(nullptr);
 }
 
+// --- History --------------------------------------------------------------------------------
+// The heats kept in the board's flash (heatstore.h), newest first, a page at a time as the
+// list is scrolled; a tap opens one with all its laps. Store calls wait on the store's own
+// task, so a page is a few milliseconds of the LVGL task, never a flash access of its own.
+
+static constexpr int HIST_PAGE = 8, HIST_MAX = 300, HIST_ROW = 58;
+
+struct HistoryState
+{
+    heatstore::Entry entry[HIST_MAX];
+    lv_obj_t *row[HIST_MAX], *sub[HIST_MAX];
+    int count;
+    bool more;
+};
+
+static HistoryState *hist = nullptr; // PSRAM, allocated on first use
+static struct
+{
+    lv_obj_t *list, *info, *clear, *clearLabel, *empty;
+    uint32_t askId, askAt;    // a long-pressed heat waiting for its confirming tap
+    uint32_t clearAskedAt;    // Clear all waiting for its confirming tap
+    uint32_t longAt;          // when a row was long-pressed (the release isn't a tap)
+} histPage;
+
+static void fmtDate(int64_t t, char *out, size_t len, bool utc)
+{
+    static const char *MONTH[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    if (t <= 0)
+    {
+        snprintf(out, len, "Not dated");
+        return;
+    }
+    time_t tt = (time_t)t;
+    struct tm tmv;
+    gmtime_r(&tt, &tmv); // no time zone on the board: the website's clock, UTC
+    snprintf(out, len, "%d %s %02d:%02d%s", tmv.tm_mday, MONTH[tmv.tm_mon % 12], tmv.tm_hour, tmv.tm_min, utc ? " UTC" : "");
+}
+
+static bool histAsking(uint32_t id) { return histPage.askId == id && millis() - histPage.askAt < 4000; }
+static bool clearAsking() { return histPage.clearAskedAt && millis() - histPage.clearAskedAt < 4000; }
+
+static void histRowText(int i)
+{
+    const heatstore::Entry &e = hist->entry[i];
+    lv_obj_t *row = hist->row[i];
+    bool ask = histAsking(e.id);
+    char d[28];
+    fmtDate(e.startedAt, d, sizeof(d), false);
+    char t[48];
+    snprintf(t, sizeof(t), "%s  -  %s", d, ask ? "TAP AGAIN TO DELETE" : e.sent ? "uploaded" : "waiting to upload");
+    lv_label_set_text(hist->sub[i], t);
+    lv_obj_set_style_text_color(hist->sub[i], lv_color_hex(ask ? col::ALERT : e.sent ? col::MUTED : col::SELECTED_TEXT), 0);
+    lv_obj_set_style_border_color(row, lv_color_hex(ask ? col::ALERT : col::LINE), 0);
+}
+
+static void heatOpen(uint32_t id);
+static void historyReload();
+
+static void histRowClick(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (!hist || i >= hist->count || millis() - histPage.longAt < 600) return;
+    uint32_t id = hist->entry[i].id;
+    if (histAsking(id))
+    {
+        histPage.askId = 0;
+        heatstore::remove(id);
+        // Start the list again: the rest have moved up.
+        historyReload();
+        return;
+    }
+    heatOpen(id);
+}
+
+static void histRowLong(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (!hist || i >= hist->count) return;
+    histPage.longAt = millis();
+    int prev = -1;
+    for (int k = 0; k < hist->count; k++)
+        if (hist->entry[k].id == histPage.askId) prev = k;
+    histPage.askId = hist->entry[i].id;
+    histPage.askAt = millis();
+    if (prev >= 0) histRowText(prev);
+    histRowText(i);
+}
+
+static void histAddRow(int i)
+{
+    const heatstore::Entry &e = hist->entry[i];
+    lv_obj_t *r = button(histPage.list, 16, i * HIST_ROW, 448, HIST_ROW - 6, col::SURFACE, col::LINE, 12, histRowClick,
+                         (void *)(intptr_t)i);
+    lv_obj_add_event_cb(r, histRowLong, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
+    hist->row[i] = r;
+    char t[48];
+    snprintf(t, sizeof(t), "%s %u %s %s", e.prefix[0] ? e.prefix : "Heat", e.heat, "-", e.mode == race::RACE ? "Race" : "Practice");
+    lv_obj_t *title = text(r, &lv_font_montserrat_16, col::TEXT, t);
+    lv_obj_set_pos(title, 14, 6);
+    hist->sub[i] = text(r, &lv_font_montserrat_12, col::MUTED, "");
+    lv_obj_set_pos(hist->sub[i], 14, 30);
+    char b[16], a[16];
+    fmtLap(e.bestMs, b, sizeof(b));
+    fmtLap(e.avgMs, a, sizeof(a));
+    lv_obj_t *laps = text(r, &lv_font_montserrat_16, col::TEXT, "");
+    lv_label_set_text_fmt(laps, "%u lap%s", e.laps, e.laps == 1 ? "" : "s");
+    lv_obj_align(laps, LV_ALIGN_TOP_RIGHT, -14, 6);
+    lv_obj_t *stats = text(r, &lv_font_montserrat_12, e.laps ? col::BEST : col::MUTED, "");
+    if (e.laps) lv_label_set_text_fmt(stats, "best %s  avg %s", b, a);
+    else lv_label_set_text(stats, "no timed laps");
+    lv_obj_align(stats, LV_ALIGN_TOP_RIGHT, -14, 30);
+    histRowText(i);
+}
+
+// Reads the next page into the list.
+static void histLoadPage()
+{
+    if (!hist || !hist->more) return;
+    uint32_t before = hist->count ? hist->entry[hist->count - 1].id : 0;
+    int want = HIST_PAGE < HIST_MAX - hist->count ? HIST_PAGE : HIST_MAX - hist->count;
+    int n = want > 0 ? heatstore::list(before, hist->entry + hist->count, want) : 0;
+    for (int i = 0; i < n; i++) histAddRow(hist->count + i);
+    hist->count += n;
+    hist->more = n == want && hist->count < HIST_MAX;
+    lv_obj_set_style_text_opa(histPage.empty, hist->count ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+}
+
+static void historyReload()
+{
+    if (!hist)
+    {
+        hist = static_cast<HistoryState *>(heap_caps_calloc(1, sizeof(HistoryState), MALLOC_CAP_SPIRAM));
+        if (!hist) return;
+    }
+    lv_obj_clean(histPage.list);
+    lv_obj_scroll_to_y(histPage.list, 0, LV_ANIM_OFF);
+    hist->count = 0;
+    hist->more = heatstore::ready();
+    histPage.askId = 0;
+    histPage.clearAskedAt = 0;
+    histLoadPage();
+    histPage.askAt = 0;
+}
+
+static void histScrolled(lv_event_t *)
+{
+    if (lv_obj_get_scroll_bottom(histPage.list) < 120) histLoadPage();
+}
+
+static void clearAllTap(lv_event_t *)
+{
+    if (!heatstore::ready()) return;
+    if (clearAsking())
+    {
+        histPage.clearAskedAt = 0;
+        heatstore::removeAll();
+        historyReload();
+        return;
+    }
+    histPage.clearAskedAt = millis();
+}
+
+static void openHistory(lv_event_t *)
+{
+    if (app::armed()) return;
+    show(S_HISTORY);
+    historyReload();
+}
+
+static void buildHistory()
+{
+    lv_obj_t *s = screens[S_HISTORY] = screen();
+    header(s, LV_SYMBOL_LIST, "History", S_IDLE);
+    histPage.info = text(s, &lv_font_montserrat_12, col::MUTED, "");
+    lv_obj_set_pos(histPage.info, 16, 62);
+    lv_label_set_long_mode(histPage.info, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(histPage.info, 330);
+    histPage.clear = button(s, 372, 54, 92, 28, col::SURFACE, col::LINE, 14, clearAllTap);
+    histPage.clearLabel = text(histPage.clear, &lv_font_montserrat_12, col::TEXT, "Clear all");
+    lv_obj_center(histPage.clearLabel);
+    histPage.list = lv_obj_create(s);
+    lv_obj_remove_style_all(histPage.list);
+    lv_obj_set_pos(histPage.list, 0, 90);
+    lv_obj_set_size(histPage.list, board::WIDTH, board::HEIGHT - 90);
+    lv_obj_add_flag(histPage.list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(histPage.list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(histPage.list, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_event_cb(histPage.list, histScrolled, LV_EVENT_SCROLL, nullptr);
+    histPage.empty = text(s, &lv_font_montserrat_16, col::MUTED, "No heats yet - they appear here once flown");
+    lv_obj_align(histPage.empty, LV_ALIGN_CENTER, 0, 30);
+}
+
+static void refreshHistory()
+{
+    heatstore::Usage u = heatstore::usage();
+    bool ask = clearAsking();
+    if (!heatstore::ready()) lv_label_set_text(histPage.info, "Flash storage isn't available");
+    else if (ask)
+        lv_label_set_text_fmt(histPage.info, "Delete all %d heats%s?", u.waiting + u.sent,
+                              u.waiting ? " (some not uploaded yet)" : "");
+    else
+        lv_label_set_text_fmt(histPage.info, "%d heat%s  -  %d waiting to upload  -  %.1f MB free", u.waiting + u.sent,
+                              u.waiting + u.sent == 1 ? "" : "s", u.waiting, u.freeBytes / 1048576.0f);
+    lv_obj_set_style_text_color(histPage.info, lv_color_hex(ask ? col::ALERT : heatstore::nearlyFull() ? col::ALERT : col::MUTED), 0);
+    lv_label_set_text(histPage.clearLabel, ask ? "Tap to confirm" : "Clear all");
+    lv_obj_set_style_text_color(histPage.clearLabel, lv_color_hex(ask ? col::ALERT : col::TEXT), 0);
+    lv_obj_set_width(histPage.clear, ask ? 120 : 92);
+    lv_obj_set_x(histPage.clear, ask ? 344 : 372);
+    if (hist)
+        for (int i = 0; i < hist->count; i++)
+            if (hist->entry[i].id == histPage.askId) histRowText(i);
+    // A confirmation that ran out reverts on its own.
+    if (hist && histPage.askId && !histAsking(histPage.askId))
+    {
+        for (int i = 0; i < hist->count; i++) histRowText(i);
+        histPage.askId = 0;
+    }
+}
+
+// --- One heat -------------------------------------------------------------------------------
+// Header, summary and every lap with its gap to the best: the best lap in purple, the slowest in
+// the app's slow-lap red.
+
+static heatlog::Heat *detail = nullptr; // PSRAM
+static struct
+{
+    lv_obj_t *title, *line, *stat[5], *list;
+} heatPage;
+
+static void buildHeat()
+{
+    lv_obj_t *s = screens[S_HEAT] = screen();
+    header(s, nullptr, "", S_HISTORY);
+    heatPage.title = text(s, &lv_font_montserrat_20, col::TEXT, "");
+    lv_obj_set_pos(heatPage.title, 56, 16);
+    heatPage.line = text(s, &lv_font_montserrat_12, col::MUTED, "");
+    lv_obj_set_pos(heatPage.line, 16, 60);
+    lv_label_set_long_mode(heatPage.line, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(heatPage.line, 448);
+    const char *names[5] = {"Laps", "Best", "Average", "Total", "Ignored"};
+    for (int i = 0; i < 5; i++)
+    {
+        lv_obj_t *c = panel(s, 16 + i * 90, 80, 86, 50, col::SURFACE, col::LINE, 10);
+        lv_obj_t *n = text(c, &lv_font_montserrat_12, col::MUTED, names[i]);
+        lv_obj_set_pos(n, 8, 5);
+        heatPage.stat[i] = text(c, &lv_font_montserrat_16, i == 1 ? col::BEST : col::TEXT, "");
+        lv_obj_set_pos(heatPage.stat[i], 8, 25);
+    }
+    heatPage.list = lv_obj_create(s);
+    lv_obj_remove_style_all(heatPage.list);
+    lv_obj_set_pos(heatPage.list, 0, 138);
+    lv_obj_set_size(heatPage.list, board::WIDTH, board::HEIGHT - 138);
+    lv_obj_add_flag(heatPage.list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(heatPage.list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(heatPage.list, LV_SCROLLBAR_MODE_OFF);
+}
+
+static void heatShow(const heatlog::Heat &h)
+{
+    // heatlog::label's middle dot isn't in the UI fonts: a dash.
+    char title[64];
+    snprintf(title, sizeof(title), "%s %u - %s", h.prefix[0] ? h.prefix : "Heat", h.heat, h.mode == race::RACE ? "Race" : "Practice");
+    lv_label_set_text(heatPage.title, title);
+
+    char d[28], l[120];
+    fmtDate(h.startedAt, d, sizeof(d), true);
+    if (h.mode == race::RACE)
+    {
+        char r[24] = "";
+        if (h.raceMs >= 0) fmtLap((uint32_t)h.raceMs, r, sizeof(r));
+        if (h.lapLimit) snprintf(l, sizeof(l), "%s  -  first to %u laps%s%s", d, h.lapLimit, r[0] ? "  -  finished in " : "", r);
+        else snprintf(l, sizeof(l), "%s  -  %u s race%s%s", d, h.timeLimitS, r[0] ? "  -  finished in " : "", r);
+    }
+    else snprintf(l, sizeof(l), "%s  -  practice%s%s", d, h.event[0] ? "  -  " : "", h.event);
+    lv_label_set_text(heatPage.line, l);
+
+    uint32_t best = 0, slow = 0;
+    uint64_t sum = 0;
+    int bi = -1, si = -1;
+    for (int i = 0; i < h.lapCount; i++)
+    {
+        sum += h.laps[i].ms;
+        if (bi < 0 || h.laps[i].ms < best) best = h.laps[i].ms, bi = i;
+        if (si < 0 || h.laps[i].ms > slow) slow = h.laps[i].ms, si = i;
+    }
+    char b[16];
+    lv_label_set_text_fmt(heatPage.stat[0], "%u", h.lapCount);
+    fmtLap(best, b, sizeof(b));
+    lv_label_set_text(heatPage.stat[1], h.lapCount ? b : "-");
+    fmtLap(h.lapCount ? (uint32_t)(sum / h.lapCount) : 0, b, sizeof(b));
+    lv_label_set_text(heatPage.stat[2], h.lapCount ? b : "-");
+    int64_t total = h.raceMs >= 0 ? h.raceMs : (h.holeshotMs >= 0 ? h.holeshotMs + (int64_t)sum : (int64_t)sum);
+    char tt[16];
+    fmtLap((uint32_t)total, tt, sizeof(tt));
+    lv_label_set_text(heatPage.stat[3], h.lapCount ? tt : "-");
+    lv_label_set_text_fmt(heatPage.stat[4], "%u", h.ignoredSoon + h.ignoredLong);
+
+    lv_obj_clean(heatPage.list);
+    lv_obj_scroll_to_y(heatPage.list, 0, LV_ANIM_OFF);
+    for (int i = 0; i < h.lapCount; i++)
+    {
+        bool isBest = i == bi, isSlow = i == si && h.lapCount > 2 && i != bi;
+        int y = i * 34;
+        lv_obj_t *r = panel(heatPage.list, 16, y, 448, 30, isBest ? col::BEST_TINT : isSlow ? 0x2A1416 : col::SURFACE,
+                            isBest ? col::BEST_EDGE : isSlow ? 0x4A2226 : col::LINE, 8);
+        uint32_t color = isBest ? col::BEST : isSlow ? col::ALERT : col::TEXT;
+        lv_obj_t *n = text(r, &lv_font_montserrat_14, col::MUTED, "");
+        lv_label_set_text_fmt(n, "Lap %u", h.laps[i].lap);
+        lv_obj_set_pos(n, 12, 6);
+        fmtLap(h.laps[i].ms, b, sizeof(b));
+        lv_obj_t *tm = text(r, &lv_font_montserrat_16, color, b);
+        lv_obj_set_pos(tm, 150, 5);
+        if (!isBest)
+        {
+            char g[20];
+            uint32_t gap = h.laps[i].ms - best;
+            snprintf(g, sizeof(g), "+%lu.%03lu", (unsigned long)(gap / 1000), (unsigned long)(gap % 1000));
+            lv_obj_t *gl = text(r, &lv_font_montserrat_14, isSlow ? col::ALERT : col::MUTED, g);
+            lv_obj_align(gl, LV_ALIGN_TOP_RIGHT, -14, 6);
+        }
+        else
+        {
+            lv_obj_t *bl = text(r, &lv_font_montserrat_12, col::BEST, "best");
+            lv_obj_align(bl, LV_ALIGN_TOP_RIGHT, -14, 8);
+        }
+    }
+    if (!h.lapCount)
+    {
+        lv_obj_t *none = text(heatPage.list, &lv_font_montserrat_14, col::MUTED, "No timed laps in this heat");
+        lv_obj_set_pos(none, 16, 8);
+    }
+}
+
+static void heatOpen(uint32_t id)
+{
+    if (!detail) detail = static_cast<heatlog::Heat *>(heap_caps_malloc(sizeof(heatlog::Heat), MALLOC_CAP_SPIRAM));
+    if (!detail || !heatstore::loadAny(id, *detail)) return;
+    heatShow(*detail);
+    show(S_HEAT);
+}
+
+static void openNewest(lv_event_t *)
+{
+    if (app::armed()) return;
+    heatstore::Entry e;
+    if (heatstore::ready() && heatstore::list(0, &e, 1) == 1) heatOpen(e.id);
+    else openHistory(nullptr);
+}
+
+static void refreshHeat() {}
+
 // --- Navigation ---------------------------------------------------------------------------
 
 static void refresh(Screen s)
@@ -1634,6 +2145,9 @@ static void refresh(Screen s)
     case S_RADIO: refreshRadio(); break;
     case S_MESSAGES: refreshMessages(); break;
     case S_RACE: refreshRace(); break;
+    case S_SOUND: refreshSound(); break;
+    case S_HISTORY: refreshHistory(); break;
+    case S_HEAT: refreshHeat(); break;
     case S_KEYBOARD: refreshKeyboard(); break;
     case S_SYNC: refreshSync(); break;
     case S_WIFI: refreshWifi(); break;
@@ -1673,7 +2187,7 @@ static void tick(lv_timer_t *)
     else if (!armed && current == S_LIVE) show(S_IDLE);
     else if (current == S_LIVE) refreshLive();
     else if (current == S_SENSITIVITY) tickSensitivity();
-    else if (current == S_SYNC || current == S_WIFI || current == S_SETTINGS)
+    else if (current == S_SYNC || current == S_WIFI || current == S_SETTINGS || current == S_HISTORY)
     {
         static uint32_t last = 0;
         if (millis() - last >= 250) // a sync's progress, scan results
@@ -1703,7 +2217,7 @@ void display::begin()
     // One screen at a time, letting go of LVGL in between: building them all takes
     // ~0.4 s, and the splash keeps barking meanwhile.
     void (*const builders[])() = {buildIdle,  buildLive,  buildSettings, buildChannel, buildSensitivity,
-                                  buildFalseReads, buildRadio, buildMessages, buildRace, buildKeyboard,
+                                  buildFalseReads, buildRadio, buildMessages, buildRace, buildSound, buildHistory, buildHeat, buildKeyboard,
                                   buildSync, buildWifi, buildWifiKeys, buildPair};
     for (auto build : builders)
     {

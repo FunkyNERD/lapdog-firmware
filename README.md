@@ -156,6 +156,8 @@ The workflow pulls `vrxc-msp` (public) over HTTPS rather than the `ssh://` URL i
 
 - **Practice:** the first gate pass starts lap 1; laps until disarmed. Disarming sends FINISHED and the total (first pass to last pass), like a race finish, so LapDog LCD ends the heat and keeps the laps on screen.
 - **Race:** stage ("ARM NOW") → random 1–3 s hold (`race.hold`) → "GO!" → the first pass is the holeshot → laps → "FINISHED!" at the lap limit, or on the first pass after the time limit.
+- **Lap sound (touch timer):** the board's speaker plays the chosen sound on the start pass and every counted lap (never on an ignored pass). Settings → Sound on the screen, or `set sound bark|tone|ding|bell|chirp|double|off`, `set volume 0-100`, `set cues on|off` (a tone at GO and the finish) and `set sound test`, then `save`. Stored apart from the settings blob, so older saved settings survive. The sounds are the app's (`src/touch/sounds/`, licences in lapdog-android `sounds-licenses/`).
+- **History (touch timer):** History on the idle screen (or a tap on the Last session card) lists every heat kept in the board's flash, newest first; tap one for its laps, long-press one to delete it, Clear all empties the list. When flash is under 10 % free, the oldest uploaded heats are deleted to make room. Times are the website's clock in UTC (the board has no time zone); a heat flown before the first sync shows "Not dated".
 - The timer numbers heats itself: every arm takes `heat` and advances it (persisted straight away). `restart` reruns the same heat.
 
 ### False-read protection
