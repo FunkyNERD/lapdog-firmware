@@ -4,6 +4,9 @@
 // PWM) over I2C, and LVGL on top, turned to landscape 480x320.
 // Pins and init order follow Waveshare's own board package for this board.
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "lvgl.h"
 
 namespace board
@@ -32,5 +35,10 @@ void unlock();
 // Not from LVGL's own task.
 void lockBus();
 void unlockBus();
+
+// The AXP2101 power-management chip (I2C address 0x34) on the shared bus. False if it
+// isn't there or doesn't answer.
+bool pmuRead(uint8_t reg, uint8_t *buf, size_t len);
+bool pmuWrite(uint8_t reg, uint8_t value);
 
 } // namespace board

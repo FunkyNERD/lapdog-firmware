@@ -25,6 +25,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "heatstore.h"
+#include "power.h"
 #include "race.h"
 #include "settings.h"
 #include "splash.h"
@@ -371,11 +372,46 @@ static void toggleRefresh(Toggle *t)
     else lv_obj_remove_state(t->sw, LV_STATE_CHECKED);
 }
 
+// --- Battery ------------------------------------------------------------------------------
+// A level symbol in a pill in the top bar of the idle and armed screens (the percentage is
+// on the Settings tile), a bolt beside it while charging, the USB symbol when there's no
+// battery. Red below 15 %. Read from the
+// AXP2101 (power.h) every few seconds by tick().
+
+static constexpr int LOW_BATTERY_PERCENT = 15, VERY_LOW_BATTERY_PERCENT = 5;
+static const char *levelSymbol(int pct)
+{
+    if (pct >= 88) return LV_SYMBOL_BATTERY_FULL;
+    if (pct >= 63) return LV_SYMBOL_BATTERY_3;
+    if (pct >= 38) return LV_SYMBOL_BATTERY_2;
+    if (pct >= 13) return LV_SYMBOL_BATTERY_1;
+    return LV_SYMBOL_BATTERY_EMPTY;
+}
+
+static void showBattery(lv_obj_t *label, uint32_t normal)
+{
+    power::State b = power::state();
+    char t[24] = "";
+    uint32_t color = normal;
+    if (b.valid && b.battery && b.percent >= 0)
+    {
+        // The level as a symbol alone (the percentage is on the Settings tile), with a bolt beside it while charging.
+        snprintf(t, sizeof(t), "%s%s", b.charging ? LV_SYMBOL_CHARGE " " : "", levelSymbol(b.percent));
+        if (b.percent < LOW_BATTERY_PERCENT && !b.charging) color = col::ALERT;
+    }
+    else if (b.valid && b.vbus) snprintf(t, sizeof(t), LV_SYMBOL_USB);
+    lv_label_set_text(label, t);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_obj_t *pill = lv_obj_get_parent(label);
+    if (t[0]) lv_obj_remove_flag(pill, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(pill, LV_OBJ_FLAG_HIDDEN);
+}
+
 // --- Idle -------------------------------------------------------------------------------
 
 static struct
 {
-    lv_obj_t *chan, *radio, *event, *heat, *practice, *race, *raceLabel, *armHint;
+    lv_obj_t *chan, *radio, *event, *heat, *practice, *race, *raceLabel, *armHint, *battery;
     lv_obj_t *lastTitle, *lastLaps, *lastBest, *lastAvg;
 } idle;
 
@@ -430,8 +466,9 @@ static void buildIdle()
     lv_obj_t *logo = lv_image_create(s);
     lv_image_set_src(logo, &art::lockup);
     lv_obj_set_pos(logo, 16, 12); // level with the chips
-    chip(s, &idle.chan, 248, 110);
-    chip(s, &idle.radio, 364, 60);
+    chip(s, &idle.chan, 196, 110);
+    chip(s, &idle.radio, 312, 60);
+    chip(s, &idle.battery, 376, 48); // between the radio pill and the cog
     lv_obj_t *gear = button(s, 428, 4, 48, 48, col::BG, 0, 24, goTo, (void *)(intptr_t)S_SETTINGS);
     lv_obj_center(text(gear, &lv_font_montserrat_24, col::TEXT, LV_SYMBOL_SETTINGS));
 
@@ -485,6 +522,7 @@ static void refreshIdle()
 {
     const Settings &s = settings::get();
     refreshChannelChip(idle.chan);
+    showBattery(idle.battery, col::SELECTED_TEXT);
     char r[24] = "";
     if (s.links & LINK_BLE) strcat(r, LV_SYMBOL_BLUETOOTH);
     if (s.links & LINK_ESPNOW) strcat(r, s.links & LINK_BLE ? " " LV_SYMBOL_WIFI : LV_SYMBOL_WIFI);
@@ -518,7 +556,9 @@ static void refreshIdle()
         fmtMinutes(s.raceTimeS, t, sizeof(t));
         lv_label_set_text_fmt(idle.raceLabel, "Race - %s", t);
     }
-    lv_label_set_text(idle.armHint, cloud::busy() ? "website sync has the radio" : race ? "stage, then GO" : "first pass starts lap 1");
+    power::State pw = power::state();
+    bool veryLow = pw.valid && pw.battery && pw.percent >= 0 && pw.percent < VERY_LOW_BATTERY_PERCENT && !pw.charging;
+    lv_label_set_text(idle.armHint, veryLow ? "battery very low: a heat may not last" : cloud::busy() ? "website sync has the radio" : race ? "stage, then GO" : "first pass starts lap 1");
 
     Model m = snapshot();
     char b[16];
@@ -544,7 +584,7 @@ static void refreshIdle()
 
 static struct
 {
-    lv_obj_t *status, *chan, *lapNo, *lapWord, *clock, *last, *best, *bestTitle;
+    lv_obj_t *status, *battery, *chan, *lapNo, *lapWord, *clock, *last, *best, *bestTitle;
     lv_obj_t *recent[3], *recentLap[3], *recentBox[3], *signal, *signalDb;
 } live;
 
@@ -558,6 +598,7 @@ static void buildLive()
     lv_obj_set_style_outline_width(dot, 4, 0);
     live.status = text(s, &lv_font_montserrat_14, col::TEXT, "");
     lv_obj_set_pos(live.status, 38, 18);
+    chip(s, &live.battery, 300, 48);
     chip(s, &live.chan, 354, 110);
 
     live.lapWord = text(s, &lv_font_montserrat_24, col::MUTED, "LAP");
@@ -609,6 +650,7 @@ static void refreshLive()
     const Settings &s = settings::get();
     bool race = m.mode == race::RACE;
     lv_label_set_text_fmt(live.status, "ARMED - %s     Heat %u", race ? "RACE" : "PRACTICE", m.heat);
+    showBattery(live.battery, col::SELECTED_TEXT);
     refreshChannelChip(live.chan);
 
     char b[24];
@@ -673,7 +715,7 @@ static void refreshLive()
 
 // --- Settings grid ------------------------------------------------------------------------
 
-static constexpr int TILES = 7;
+static constexpr int TILES = 8;
 
 static struct
 {
@@ -695,7 +737,7 @@ static void buildSettings()
         {LV_SYMBOL_WIFI, "Channel", S_CHANNEL},           {LV_SYMBOL_EYE_OPEN, "Sensitivity", S_SENSITIVITY},
         {LV_SYMBOL_WARNING, "False reads", S_FALSE_READS}, {LV_SYMBOL_BLUETOOTH, "Radio output", S_RADIO},
         {LV_SYMBOL_EDIT, "Race messages", S_MESSAGES},    {LV_SYMBOL_LOOP, "Race defaults", S_RACE},
-        {LV_SYMBOL_UPLOAD, "Website sync", S_SYNC},
+        {LV_SYMBOL_UPLOAD, "Website sync", S_SYNC},       {LV_SYMBOL_CHARGE, "Battery", S_SETTINGS},
     };
     // Three rows of three: icon and title on top, what it's set to below.
     for (int i = 0; i < TILES; i++)
@@ -713,6 +755,7 @@ static void buildSettings()
         lv_obj_set_pos(grid.value[i], 10, 52);
         lv_label_set_long_mode(grid.value[i], LV_LABEL_LONG_DOT);
         lv_obj_set_width(grid.value[i], 124);
+        if (i == TILES - 1) lv_obj_remove_flag(t, LV_OBJ_FLAG_CLICKABLE); // the battery tile only reports
     }
 }
 
@@ -746,6 +789,11 @@ static void refreshSettings()
     else if (!cloud::storeReady()) lv_label_set_text(grid.value[6], "No storage");
     else if (waiting > 0) lv_label_set_text_fmt(grid.value[6], "%d heat%s waiting", waiting, waiting == 1 ? "" : "s");
     else lv_label_set_text(grid.value[6], "Up to date");
+    power::State pw = power::state();
+    if (!pw.valid) lv_label_set_text(grid.value[7], "No reading");
+    else if (!pw.battery) lv_label_set_text(grid.value[7], pw.vbus ? "USB power" : "No battery");
+    else if (pw.charging) lv_label_set_text_fmt(grid.value[7], "%d%% - charging", pw.percent);
+    else lv_label_set_text_fmt(grid.value[7], "%d%% - %.2f V", pw.percent, pw.mv / 1000.0f);
 }
 
 // --- Channel ------------------------------------------------------------------------------
@@ -1614,6 +1662,12 @@ static void show(Screen s)
 static void tick(lv_timer_t *)
 {
     if (splash::active()) return; // it loads the first screen itself
+    static uint32_t lastPower = 0;
+    if (!lastPower || millis() - lastPower >= 5000) // the AXP2101: an I2C read, a few times a minute
+    {
+        lastPower = millis();
+        power::poll();
+    }
     bool armed = app::armed();
     if (armed && current != S_LIVE) show(S_LIVE);
     else if (!armed && current == S_LIVE) show(S_IDLE);
@@ -1645,6 +1699,7 @@ static void enter() { show(app::armed() ? S_LIVE : S_IDLE); }
 void display::begin()
 {
     if (!lv_display_get_default()) return; // no panel: display::splash() said so
+    power::begin();
     // One screen at a time, letting go of LVGL in between: building them all takes
     // ~0.4 s, and the splash keeps barking meanwhile.
     void (*const builders[])() = {buildIdle,  buildLive,  buildSettings, buildChannel, buildSensitivity,

@@ -28,6 +28,8 @@
 //                            and the USB output watchdog: S:usb.this|last.kicks, .lines, .fifo
 //   sd                       touch timer: the flash heats are kept in: S:store.kb, store.free.kb,
 //                            store.waiting, store.sent, store.next (or S:store=none)
+//   power                    touch timer: battery and USB power from the AXP2101: S:power=ok|none,
+//                            power.battery, power.percent, power.mv, power.vbus, power.charging, power.charger
 //   net                      touch timer: join a saved Wi-Fi network and fetch the website over
 //                            HTTPS, to check website sync can reach it (the result is logged)
 //   sync                     touch timer: as SYNC NOW on the screen (the result is logged)

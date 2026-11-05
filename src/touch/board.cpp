@@ -65,6 +65,33 @@ static i2c_master_bus_handle_t i2cBus()
     return bus;
 }
 
+// The AXP2101 power-management chip, on the same I2C bus (power.cpp reads it).
+static i2c_master_dev_handle_t pmu = nullptr;
+static constexpr uint8_t PMU_ADDRESS = 0x34;
+
+static void pmuInit()
+{
+    i2c_master_bus_handle_t bus = i2cBus();
+    if (!bus || pmu) return;
+    i2c_device_config_t cfg = {};
+    cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    cfg.device_address = PMU_ADDRESS;
+    cfg.scl_speed_hz = 100000;
+    if (i2c_master_probe(bus, PMU_ADDRESS, 50) != ESP_OK || i2c_master_bus_add_device(bus, &cfg, &pmu) != ESP_OK) pmu = nullptr;
+}
+
+// The driver serialises the bus, so these can be called from any task, alongside touch reads.
+bool board::pmuRead(uint8_t reg, uint8_t *buf, size_t len)
+{
+    return pmu && i2c_master_transmit_receive(pmu, &reg, 1, buf, len, 50) == ESP_OK;
+}
+
+bool board::pmuWrite(uint8_t reg, uint8_t value)
+{
+    uint8_t b[2] = {reg, value};
+    return pmu && i2c_master_transmit(pmu, b, 2, 50) == ESP_OK;
+}
+
 static bool expanderInit()
 {
     i2c_master_bus_handle_t bus = i2cBus();
@@ -192,6 +219,7 @@ void board::unlockBus()
 lv_display_t *board::begin(void (*firstFrame)())
 {
     firstFrameCb = firstFrame;
+    pmuInit();
     bool expanderOk = expanderInit();
     bootlog::mark("expander");
     if (!expanderOk)

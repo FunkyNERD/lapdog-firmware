@@ -47,9 +47,9 @@ pio device monitor -e c3_oled
 | Screen | What |
 | --- | --- |
 | Boot splash | the LapDog mark barking, and the real start-up steps with progress: loading settings, preparing screens, starting the radio, calibrating the receiver at the saved channel; then READY and a fade to the idle screen (at least 1.8 s; a tap at READY skips the rest) |
-| Idle | the LapDog lockup, event and next heat, Practice / Race, the last session's laps, best and average, **ARM**. Long-press the heat name to start the numbering again at 1: it asks "Heat to 1?", and a tap on the name within 4 s confirms |
-| Armed | lap number and running lap clock, last and best lap, the last three laps, live signal, **HOLD TO DISARM** (1 s) |
-| Settings | a tile per category, each showing its current value |
+| Idle | the LapDog lockup, event and next heat, Practice / Race, the last session's laps, best and average, **ARM**. A battery level symbol in a pill in the top bar (a bolt beside it while charging, the USB symbol with no battery, red below 15 %, a warning on **ARM** below 5 %). Long-press the heat name to start the numbering again at 1: it asks "Heat to 1?", and a tap on the name within 4 s confirms |
+| Armed | the battery level in the top bar, lap number and running lap clock, last and best lap, the last three laps, live signal, **HOLD TO DISARM** (1 s) |
+| Settings | a tile per category, each showing its current value (the Battery tile only reports: percentage, voltage or charging) |
 | Channel | band tabs and the band's 8 channels |
 | Sensitivity | live signal graph with the enter/exit lines, Low/Med/High, enter and exit in 0.5 dB steps |
 | False reads, Radio output, Race messages, Race defaults | the same settings as the app; event name on an on-screen keyboard (capitals only, like the goggles' font) |
@@ -134,6 +134,7 @@ The workflow pulls `vrxc-msp` (public) over HTTPS rather than the `ssh://` URL i
 | `src/esp_sdr/` | The C5 receive path ported from ESP-SDR (GPL-3.0) |
 | `src/touch/` | Touch board: display/touch bring-up (`board.cpp`), boot splash (`splash.cpp`) and the LVGL screens (`ui.cpp`) |
 | `include/heat_log.h` | Finished heats from the session's frames, and the website's race upload body (pure logic, native-tested) |
+| `src/power.*` | Touch timer battery and USB power from the AXP2101 (read-only, polled by the screen every 5 s; the console's `power`) |
 | `src/cloud.*`, `src/heatstore.*` | Touch timer website sync: Wi-Fi, pairing and uploads; heats kept in flash |
 | `tools/gen-touch-art.py` | Generates `src/touch/touch_art.h` (the splash mark, wordmark and top-bar lockup) from lapdog-web's brand kit: rerun it when the brand changes |
 | `boards/c5_touch/` | The touch board's component: LVGL, display and touch drivers (only in `env:c5_touch`) |

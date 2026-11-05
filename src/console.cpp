@@ -9,6 +9,7 @@
 #include "cloud.h"
 #include "config.h"
 #include "driver/usb_serial_jtag.h"
+#include "power.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "esp_attr.h"
 #include "hal/usb_serial_jtag_ll.h"
@@ -177,6 +178,11 @@ static void handleLine(char *line)
         printUsbWatch("last", usbLast);
     }
     else if (!strcmp(cmd, "sd")) cloud::checkSd(); // its S: lines follow, from the sync task
+    else if (!strcmp(cmd, "power"))
+    {
+        power::poll();
+        power::printInfo();
+    }
     else if (!strcmp(cmd, "net")) ok = cloud::startCheck(); // the result is logged
     else if (!strcmp(cmd, "sync")) ok = cloud::startSync(); // as SYNC NOW; the result is logged
     else if (!strcmp(cmd, "rssi"))
