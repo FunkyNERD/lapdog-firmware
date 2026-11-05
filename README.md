@@ -47,7 +47,7 @@ pio device monitor -e c3_oled
 | Screen | What |
 | --- | --- |
 | Boot splash | the LapDog mark barking, and the real start-up steps with progress: loading settings, preparing screens, starting the radio, calibrating the receiver at the saved channel; then READY and a fade to the idle screen (at least 1.8 s; a tap at READY skips the rest) |
-| Idle | the LapDog lockup, event and next heat, Practice / Race, the last session's laps, best and average, **ARM** |
+| Idle | the LapDog lockup, event and next heat, Practice / Race, the last session's laps, best and average, **ARM**. Long-press the heat name to start the numbering again at 1: it asks "Heat to 1?", and a tap on the name within 4 s confirms |
 | Armed | lap number and running lap clock, last and best lap, the last three laps, live signal, **HOLD TO DISARM** (1 s) |
 | Settings | a tile per category, each showing its current value |
 | Channel | band tabs and the band's 8 channels |

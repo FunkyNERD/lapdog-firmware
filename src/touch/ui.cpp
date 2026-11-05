@@ -394,6 +394,29 @@ static void armNow(lv_event_t *)
     app::requestArm(r);
 }
 
+// Long-press the heat name to start the heat numbering again at 1. The press only asks:
+// a tap on the name within 4 s says yes (the same way Unpair confirms), so a stray press
+// can't throw the number away. Idle only: this screen isn't shown while armed.
+static uint32_t heatResetAskedAt; // millis() of the long press, 0 = not asking
+static bool askingHeatReset() { return heatResetAskedAt && millis() - heatResetAskedAt < 4000; }
+
+static void heatNameLongPress(lv_event_t *)
+{
+    if (app::armed()) return;
+    heatResetAskedAt = millis();
+    refresh(S_IDLE);
+}
+
+static void heatNameTap(lv_event_t *)
+{
+    // The release after a long press isn't an answer.
+    if (!askingHeatReset() || millis() - heatResetAskedAt < 600 || app::armed()) return;
+    heatResetAskedAt = 0;
+    settings::setNextHeatUnsaved(1);
+    save();
+    refresh(S_IDLE);
+}
+
 static void chip(lv_obj_t *s, lv_obj_t **label, int x, int w)
 {
     lv_obj_t *c = panel(s, x, 12, w, 30, col::SURFACE, col::LINE, 15);
@@ -416,6 +439,10 @@ static void buildIdle()
     lv_obj_set_pos(idle.event, 16, 58);
     idle.heat = text(s, &lv_font_montserrat_48, col::TEXT, "");
     lv_obj_set_pos(idle.heat, 14, 74);
+    lv_obj_add_flag(idle.heat, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(idle.heat, 12);
+    lv_obj_add_event_cb(idle.heat, heatNameLongPress, LV_EVENT_LONG_PRESSED, nullptr);
+    lv_obj_add_event_cb(idle.heat, heatNameTap, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *seg = panel(s, 16, 136, 284, 50, col::SURFACE, col::LINE, 12);
     idle.practice = button(seg, 4, 4, 136, 40, col::SURFACE, 0, 9, pickMode, (void *)(intptr_t)race::PRACTICE);
@@ -466,7 +493,20 @@ static void refreshIdle()
     char ev[race::EVENT_MAX + 1];
     race::upper(s.event, ev, sizeof(ev));
     lv_label_set_text(idle.event, s.msg.event ? ev : "");
-    lv_label_set_text_fmt(idle.heat, "%s %u", s.heatPrefix[0] ? s.heatPrefix : "Heat", settings::nextHeat());
+    if (askingHeatReset())
+    {
+        lv_label_set_text(idle.heat, "Heat to 1?");
+        lv_obj_set_style_text_color(idle.heat, lv_color_hex(col::ALERT), 0);
+        lv_label_set_text(idle.event, "TAP THE NAME AGAIN TO RESET THE HEAT NUMBER");
+        lv_obj_set_style_text_color(idle.event, lv_color_hex(col::ALERT), 0);
+    }
+    else
+    {
+        heatResetAskedAt = 0;
+        lv_obj_set_style_text_color(idle.heat, lv_color_hex(col::TEXT), 0);
+        lv_obj_set_style_text_color(idle.event, lv_color_hex(col::MUTED), 0);
+        lv_label_set_text_fmt(idle.heat, "%s %u", s.heatPrefix[0] ? s.heatPrefix : "Heat", settings::nextHeat());
+    }
 
     bool race = s.mode == race::RACE;
     setSelected(idle.practice, !race, true);
