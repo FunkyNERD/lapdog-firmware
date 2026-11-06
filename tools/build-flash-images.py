@@ -6,7 +6,7 @@ For each device it builds the PlatformIO env, then writes to dist/:
   <id>-firmware.bin(.sha256)  the app image (over-the-air updates)
   <id>-factory.bin(.sha256)   everything a first install needs, merged into one image flashed
                               at 0x0: bootloader, partition table and the app
-  flash.json                  the devices, their chips and their factory images, for the
+  flash.json                  the devices, their chips, their factory and app images, for the
                               LapDog website's browser flasher
 
 Offsets come from PlatformIO (project metadata): the bootloader is at 0x0 on the C3 but 0x2000
@@ -87,7 +87,7 @@ def build(device, version):
     else:
         run(PIO, "pkg", "exec", "--package", "tool-esptoolpy", "--", "esptool.py", *args)
 
-    write_sha(app)
+    app_sha = write_sha(app)
     return {
         "id": dev,
         "name": device["name"],
@@ -97,6 +97,11 @@ def build(device, version):
         "factory": os.path.basename(factory),
         "size": os.path.getsize(factory),
         "sha256": write_sha(factory),
+        # The app alone, flashed at 0x10000 so a timer keeps its settings: what the Android app
+        # updates a timer over USB with (lapdog-android#3), and the website serves per version.
+        "app": os.path.basename(app),
+        "appSize": os.path.getsize(app),
+        "appSha256": app_sha,
     }
 
 
