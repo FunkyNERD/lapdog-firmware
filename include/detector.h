@@ -18,6 +18,12 @@
 // trackBaseline(rise), tracked: it starts at the first sample, follows the
 // smoothed level down quickly and up only slowly, and holds still during a
 // peak - so a pass never lifts its own floor.
+//
+// Tracking settles on the quad-off floor, and a powered quad anywhere in a
+// small room sits 15-25 dB above that (issue #12), so with tracking the
+// thresholds can't be small. After calibration (calibrate.h) the baseline is
+// the measured floor, fixed, and enter/exit come from the in-flight and gate
+// levels; a fixed baseline is kept across reset().
 
 #include <stdint.h>
 
@@ -54,9 +60,10 @@ public:
     void reset()
     {
         inPeak_ = false;
+        pending_ = false;
         haveLast_ = false;
         haveEma_ = false;
-        haveBaseline_ = false;
+        if (rise_ > 0) haveBaseline_ = false; // a fixed (calibrated) floor survives a reset
     }
 
     void setBaseline(float db)
@@ -66,6 +73,12 @@ public:
     }
     // rise: per-sample pull up towards the level outside peaks (0 = fixed baseline).
     void trackBaseline(float rise) { rise_ = rise; }
+    // A gate pass can dip under exitDb for a moment and come back (session 1:
+    // 0.3-0.9 s later, sometimes stronger). With a merge window, an exit waits
+    // up to ms for a re-entry, and a re-entry continues the same peak. The pass
+    // time is still the peak's; the result just comes out up to ms later. The
+    // parked check then uses the longest stretch above exitDb. 0 = off.
+    void mergeWithin(uint32_t ms) { mergeMs_ = ms; }
     float baseline() const { return baseline_; }
     float smoothed() const { return ema_; }
     bool inPeak() const { return inPeak_; }
@@ -77,7 +90,7 @@ public:
         ema_ = haveEma_ ? ema_ + p_.emaAlpha * (db - ema_) : db;
         haveEma_ = true;
         // Not during a peak, nor on the sample that starts one.
-        if (rise_ > 0 && !inPeak_ && !(haveBaseline_ && ema_ - baseline_ >= p_.enterDb))
+        if (rise_ > 0 && !inPeak_ && !pending_ && !(haveBaseline_ && ema_ - baseline_ >= p_.enterDb))
         {
             if (!haveBaseline_) baseline_ = ema_;
             else if (ema_ < baseline_) baseline_ += BASELINE_FALL * (ema_ - baseline_);
@@ -88,14 +101,30 @@ public:
 
         if (!inPeak_)
         {
-            if (above >= p_.enterDb)
+            if (pending_ && above >= p_.enterDb)
             {
+                pending_ = false; // the same pass, back again
                 inPeak_ = true;
-                peakDb_ = ema_;
-                peakMs_ = nowMs;
-                enterMs_ = nowMs;
+                stretchMs_ = nowMs;
             }
-            return PassResult::NONE;
+            else if (pending_)
+            {
+                if (nowMs - exitMs_ < mergeMs_) return PassResult::NONE;
+                pending_ = false;
+                return finish(out);
+            }
+            else
+            {
+                if (above >= p_.enterDb)
+                {
+                    inPeak_ = true;
+                    peakDb_ = ema_;
+                    peakMs_ = nowMs;
+                    enterMs_ = stretchMs_ = nowMs;
+                    longestMs_ = 0;
+                }
+                return PassResult::NONE;
+            }
         }
 
         if (ema_ > peakDb_)
@@ -106,8 +135,21 @@ public:
         if (above > p_.exitDb) return PassResult::NONE;
 
         inPeak_ = false;
+        if (nowMs - stretchMs_ > longestMs_) longestMs_ = nowMs - stretchMs_;
+        exitMs_ = nowMs;
+        if (mergeMs_)
+        {
+            pending_ = true;
+            return PassResult::NONE;
+        }
+        return finish(out);
+    }
+
+private:
+    PassResult finish(Pass &out)
+    {
         out.atMs = peakMs_;
-        out.durationMs = nowMs - enterMs_;
+        out.durationMs = mergeMs_ ? longestMs_ : exitMs_ - enterMs_;
         out.lapMs = haveLast_ ? peakMs_ - lastPassMs_ : 0;
         if (p_.maxPeakMs && out.durationMs > p_.maxPeakMs) return PassResult::TOO_LONG;
         if (haveLast_ && out.lapMs < p_.minLapMs) return PassResult::TOO_SOON;
@@ -116,7 +158,6 @@ public:
         return PassResult::PASS;
     }
 
-private:
     static constexpr float BASELINE_FALL = 0.2f;
     DetectorParams p_;
     float rise_ = 0;
@@ -128,6 +169,11 @@ private:
     float peakDb_ = 0;
     uint32_t peakMs_ = 0;
     uint32_t enterMs_ = 0;
+    uint32_t stretchMs_ = 0; // start of the current stretch above exit (merging)
+    uint32_t longestMs_ = 0;
+    uint32_t exitMs_ = 0;
+    uint32_t mergeMs_ = 0;
+    bool pending_ = false; // exited, waiting mergeMs_ for a re-entry
     bool haveLast_ = false;
     uint32_t lastPassMs_ = 0;
 };

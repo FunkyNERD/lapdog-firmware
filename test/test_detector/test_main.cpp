@@ -149,6 +149,68 @@ void test_normal_pass_is_not_too_long()
     TEST_ASSERT_TRUE(pass.durationMs <= 1500);
 }
 
+// One gate pass in two bumps (it dips under exit between them): with a merge
+// window it's one pass, timed at the higher bump; bumps further apart stay two.
+static PassResult runBumps(Detector &d, uint32_t gapMs, float first, float second, uint32_t &doneMs, Pass &out)
+{
+    PassResult result = PassResult::NONE;
+    doneMs = 0;
+    for (uint32_t t = 0; t < 4000 + gapMs; t += 5)
+    {
+        float db = -90.0f;
+        if (t >= 1000 && t < 1200) db = -90.0f + first;
+        if (t >= 1200 + gapMs && t < 1400 + gapMs) db = -90.0f + second;
+        Pass p;
+        PassResult r = d.feed(db, t, p);
+        if (r != PassResult::NONE && result == PassResult::NONE)
+        {
+            result = r;
+            out = p;
+            doneMs = t;
+        }
+    }
+    return result;
+}
+
+void test_double_bump_merges_into_one_pass()
+{
+    Detector d = make();
+    d.mergeWithin(1000);
+    Pass p;
+    uint32_t done;
+    TEST_ASSERT_EQUAL(PassResult::PASS, runBumps(d, 400, 15.0f, 25.0f, done, p));
+    TEST_ASSERT_EQUAL(1600, p.atMs);              // the stronger, second bump
+    TEST_ASSERT_GREATER_OR_EQUAL(1800 + 1000, done); // after the merge window
+    TEST_ASSERT_EQUAL(200, p.durationMs);         // longest stretch, not the span
+    // Nothing else came out of it.
+    Detector e = make();
+    e.mergeWithin(1000);
+    unsigned results = 0;
+    for (uint32_t t = 0; t < 5000; t += 5)
+    {
+        float db = (t >= 1000 && t < 1200) || (t >= 1600 && t < 1800) ? -75.0f : -90.0f;
+        if (e.feed(db, t, p) != PassResult::NONE) results++;
+    }
+    TEST_ASSERT_EQUAL(1, results);
+}
+
+void test_bumps_outside_the_window_stay_separate()
+{
+    Detector d = make();
+    d.mergeWithin(1000);
+    Pass p;
+    unsigned passes = 0, soon = 0;
+    for (uint32_t t = 0; t < 6000; t += 5)
+    {
+        float db = (t >= 1000 && t < 1200) || (t >= 2800 && t < 3000) ? -75.0f : -90.0f;
+        PassResult r = d.feed(db, t, p);
+        passes += r == PassResult::PASS;
+        soon += r == PassResult::TOO_SOON;
+    }
+    TEST_ASSERT_EQUAL(1, passes);
+    TEST_ASSERT_EQUAL(1, soon); // 1.8 s later, inside the 3 s minimum lap
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -161,5 +223,7 @@ int main()
     RUN_TEST(test_parked_check_can_be_disabled);
     RUN_TEST(test_normal_pass_is_not_too_long);
     RUN_TEST(test_tracked_baseline_follows_the_room);
+    RUN_TEST(test_double_bump_merges_into_one_pass);
+    RUN_TEST(test_bumps_outside_the_window_stay_separate);
     return UNITY_END();
 }
