@@ -43,7 +43,6 @@ constexpr uint32_t MERGE_MS = 400;
 constexpr unsigned AUTO_PASSES = 6;
 constexpr uint32_t AUTO_ROUND_MS = 90000;
 constexpr unsigned AUTO_ROUNDS = 3;
-constexpr int AUTO_START_GAIN = 20; // session 1-2 on the touch timer; the rounds adjust it
 
 // Histogram for medians without sorting: HIST_STEP_DB bins over HIST_MIN..MAX dBFS.
 constexpr float HIST_MIN_DB = -100.0f;

@@ -10,6 +10,7 @@
 
 #include "calibrate.h"
 #include "detector.h"
+#include "presets.h"
 
 void setUp() {}
 void tearDown() {}
@@ -347,6 +348,49 @@ void test_live_count_on_synthetic_laps()
     TEST_ASSERT_EQUAL(6, live);
 }
 
+// --- Presets: steps around a reference --------------------------------------------
+
+void test_presets_step_around_the_reference()
+{
+    float e, x;
+    presets::apply(presets::MEDIUM, 21.9f, 15.4f, e, x);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 21.9f, e);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 15.4f, x);
+    presets::apply(presets::LOW, 21.9f, 15.4f, e, x);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 24.9f, e);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 18.4f, x);
+    presets::apply(presets::HIGH, 18.0f, 2.0f, e, x);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 15.0f, e);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, x); // never below the floor
+    TEST_ASSERT_EQUAL(presets::HIGH, presets::of(18.9f, 12.4f, 21.9f, 15.4f));
+    TEST_ASSERT_EQUAL(presets::MEDIUM, presets::of(21.9f, 15.4f, 21.9f, 15.4f));
+    TEST_ASSERT_EQUAL(presets::CUSTOM, presets::of(20.0f, 15.4f, 21.9f, 15.4f));
+}
+
+// An uncalibrated timer on the defaults (fixed floor -52 dBFS, +20/+13, 5 s parked
+// limit, merging) on session 1's gain-20 flight: every lap its calibration found.
+// (+18/+11 lost most of them: peaks too long, rejected as parked.)
+static DetectorParams defaults() { return {0.2f, 20.0f, 13.0f, 5000, 5000}; }
+
+void test_session_defaults_time_the_laps()
+{
+    Detector d(defaults());
+    d.setBaseline(-52.0f);
+    d.mergeWithin(calib::MERGE_MS);
+    Replay r = replay("fly20", d);
+    char msg[200];
+    int n = snprintf(msg, sizeof(msg), "passes %u, too soon %u, too long %u, laps:", r.passes, r.tooSoon, r.tooLong);
+    for (uint32_t l : r.laps) n += snprintf(msg + n, sizeof(msg) - n, " %.1f", l / 1000.0f);
+    TEST_MESSAGE(msg);
+    TEST_ASSERT_GREATER_OR_EQUAL_MESSAGE(9, r.passes, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(0, r.tooLong, msg);
+    for (uint32_t l : r.laps) TEST_ASSERT_LESS_OR_EQUAL_MESSAGE(20000, l, msg);
+    Detector q(defaults());
+    q.setBaseline(-52.0f);
+    Replay off = replay("floor20", q); // the quad landed, far from the gate
+    TEST_ASSERT_EQUAL(0, off.passes + off.tooSoon + off.tooLong);
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -361,6 +405,7 @@ int main()
     RUN_TEST(test_too_few_passes);
     RUN_TEST(test_low_contrast_is_flagged);
     RUN_TEST(test_fixed_baseline_survives_reset);
+    RUN_TEST(test_presets_step_around_the_reference);
     RUN_TEST(test_live_count_on_synthetic_laps);
     if (!loadSession())
     {
@@ -374,5 +419,6 @@ int main()
     RUN_TEST(test_session_old_settings_reject_the_laps);
     RUN_TEST(test_session_quad_off_is_quiet);
     RUN_TEST(test_session_live_pass_count);
+    RUN_TEST(test_session_defaults_time_the_laps);
     return UNITY_END();
 }

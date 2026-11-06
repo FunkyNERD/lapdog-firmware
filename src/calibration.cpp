@@ -16,10 +16,13 @@
 
 static const char *TAG = "cal";
 static const char *NVS_NS = "lapdog";
+// Uncalibrated thresholds under this were for the old tracked baseline: migrated to the defaults.
+static constexpr float MIGRATE_BELOW_DB = 15.0f;
+static constexpr uint8_t DEFAULTS_VERSION = 2; // bump to run migrateDefaults() again
 
 // --- Saved state ----------------------------------------------------------------
 
-static constexpr uint8_t CAL_VERSION = 1;
+static constexpr uint8_t CAL_VERSION = 2;
 static constexpr unsigned MAX_GAINS = 128;
 
 struct CalRecord
@@ -29,6 +32,18 @@ struct CalRecord
     int16_t gain;
     uint16_t freqMhz; // the channel it was calibrated on
     float floorDb;    // at gain, quad off
+    float enterDb;    // what calibration set: the presets' Medium (presets.h)
+    float exitDb;
+};
+
+// Version 1, before the presets' reference was kept.
+struct CalRecordV1
+{
+    uint8_t version;
+    uint8_t valid;
+    int16_t gain;
+    uint16_t freqMhz;
+    float floorDb;
 };
 
 struct FloorTable
@@ -131,10 +146,20 @@ static int lastGain = 0;
 
 // --- Queries -----------------------------------------------------------------------
 
+static void migrateDefaults(Settings &s);
+
 void calibration::begin()
 {
+    Settings &s = settings::get();
     CalRecord r;
+    CalRecordV1 v1;
     if (load("cal", &r, sizeof(r)) && r.version == CAL_VERSION) cal = r;
+    else if (load("cal", &v1, sizeof(v1)) && v1.version == 1)
+    {
+        // The thresholds in the settings are the ones that calibration applied.
+        cal = {CAL_VERSION, v1.valid, v1.gain, v1.freqMhz, v1.floorDb, s.detector.enterDb, s.detector.exitDb};
+        store("cal", &cal, sizeof(cal));
+    }
     floorsP = (FloorTable *)calloc(1, sizeof(FloorTable));
     if (floorsP && (!load("calfloor", floorsP, sizeof(FloorTable)) || floors.count > MAX_GAINS)) *floorsP = {};
     if (cal.valid)
@@ -142,7 +167,47 @@ void calibration::begin()
         sdr::setGain(cal.gain);
         ESP_LOGI(TAG, "calibrated: gain %d, floor %.1f dBFS at %u MHz", cal.gain, cal.floorDb, cal.freqMhz);
     }
+    migrateDefaults(s);
 }
+
+// Once per timer (NVS "defv"), for settings saved by firmware from before the fixed floor.
+static void migrateDefaults(Settings &s)
+{
+    uint8_t v = 0;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK)
+    {
+        nvs_get_u8(h, "defv", &v);
+        nvs_close(h);
+    }
+    if (v >= DEFAULTS_VERSION) return;
+    bool changed = false;
+    if (!cal.valid && s.detector.enterDb < MIGRATE_BELOW_DB)
+    {
+        // Thresholds for the old tracked baseline (the 14/8, 10/5, 6/3 presets) would
+        // read every flying second as a pass against the fixed floor.
+        ESP_LOGI(TAG, "thresholds %.1f/%.1f were for the tracked baseline: now %.1f/%.1f", s.detector.enterDb,
+                 s.detector.exitDb, cfg::DEFAULT_ENTER_DB, cfg::DEFAULT_EXIT_DB);
+        s.detector.exitDb = cfg::DEFAULT_EXIT_DB;
+        s.detector.enterDb = cfg::DEFAULT_ENTER_DB;
+        changed = true;
+    }
+    if (s.detector.maxPeakMs == 1500) // the old default, not a choice
+    {
+        s.detector.maxPeakMs = cfg::DEFAULT_MAX_PEAK_MS;
+        changed = true;
+    }
+    if (changed) settings::save();
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK)
+    {
+        nvs_set_u8(h, "defv", DEFAULTS_VERSION);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+float calibration::refEnterDb() { return cal.valid ? cal.enterDb : cfg::DEFAULT_ENTER_DB; }
+float calibration::refExitDb() { return cal.valid ? cal.exitDb : cfg::DEFAULT_EXIT_DB; }
 
 bool calibration::valid() { return cal.valid; }
 int calibration::gain() { return cal.gain; }
@@ -151,7 +216,7 @@ float calibration::floorDb()
 {
     int g = sdr::gain();
     if (haveFloors() && g >= 0 && g < floors.count) return floors.db[g];
-    return cal.floorDb;
+    return cal.valid ? cal.floorDb : cfg::DEFAULT_FLOOR_DB;
 }
 
 void calibration::configure(Detector &d)
@@ -161,10 +226,12 @@ void calibration::configure(Detector &d)
         // A session times at the calibrated gain, whatever a calibration round (or
         // "sdr gain") left the radio at: the thresholds were measured there.
         if (state == State::IDLE && sdr::gain() != cal.gain) sdr::setGain(cal.gain);
-        d.setBaseline(floorDb());
-        d.mergeWithin(calib::MERGE_MS);
     }
-    else d.trackBaseline(cfg::BASELINE_RISE);
+    // Uncalibrated too: the floor measured with "cal floor", else the receiver's
+    // typical one. A tracked baseline settles on the quad-off floor and then
+    // mistakes flying for passing (issue #12), so it's no longer used.
+    d.setBaseline(floorDb());
+    d.mergeWithin(calib::MERGE_MS);
 }
 
 bool calibration::active() { return state != State::IDLE; }
@@ -192,7 +259,7 @@ bool calibration::requestFly(int g) { return requestFlight(g, Req::FLY); }
 
 bool calibration::requestAuto(int g)
 {
-    return requestFlight(g < 0 ? (cal.valid ? cal.gain : calib::AUTO_START_GAIN) : g, Req::AUTO);
+    return requestFlight(g < 0 ? (cal.valid ? cal.gain : cfg::SDR_GAIN) : g, Req::AUTO);
 }
 
 bool calibration::requestStop() { return state == State::FLY && request(Req::STOP); }
@@ -225,6 +292,7 @@ void calibration::printSummary()
     if (cal.valid) printf("S:cal.gain=%d\nS:cal.floor=%.1f\n", cal.gain, floorDb());
     printf("S:cal.state=%s\n", state == State::FLOOR ? "floor" : state == State::FLY ? (autoMode ? "auto" : "fly") : "idle");
     printf("S:cal.floors=%s\n", haveFloors() ? "yes" : "no");
+    printf("S:cal.ref=%.1f/%.1f\n", refEnterDb(), refExitDb()); // the presets' Medium (presets.h)
 }
 
 static void printAdvice()
@@ -251,7 +319,6 @@ void calibration::printStatus()
         printf("S:cal.gain=%d\nS:cal.floor=%.1f\nS:cal.freq=%u\n", cal.gain, floorDb(), cal.freqMhz);
         if (cal.freqMhz != s.freqMhz) printf("S:cal.warn=calibrated on %u MHz, now on %u\n", cal.freqMhz, s.freqMhz);
         if (sdr::gain() != cal.gain) printf("S:cal.warn=gain %d in use, calibrated at %d\n", sdr::gain(), cal.gain);
-        if (s.detector.enterDb < 12) printf("S:cal.warn=enter %.1f looks like a preset, not calibrated\n", s.detector.enterDb);
     }
     if (floorsP && floors.count) printf("S:cal.floors=%u gains at %u MHz%s\n", floors.count, floors.freqMhz, haveFloors() ? "" : " (other channel)");
     else printf("S:cal.floors=none\n");
@@ -323,10 +390,12 @@ static void freeFly()
 static void doApply()
 {
     Settings &s = settings::get();
-    cal = {CAL_VERSION, 1, (int16_t)lastGain, s.freqMhz, floors.db[lastGain]};
+    float enter = roundf(lastAdvice.enterDb * 10) / 10, exit = roundf(lastAdvice.exitDb * 10) / 10;
+    cal = {CAL_VERSION, 1, (int16_t)lastGain, s.freqMhz, floors.db[lastGain], enter, exit};
     store("cal", &cal, sizeof(cal));
-    s.detector.enterDb = roundf(lastAdvice.enterDb * 10) / 10;
-    s.detector.exitDb = roundf(lastAdvice.exitDb * 10) / 10;
+    s.detector.exitDb = 0; // never enter <= exit in between
+    s.detector.enterDb = enter;
+    s.detector.exitDb = exit;
     settings::save();
     sdr::setGain(lastGain);
     printf("S:cal=on\nS:cal.gain=%d\nS:cal.floor=%.1f\nS:enter=%.1f\nS:exit=%.1f\nS:cal.done=apply\n", cal.gain,
@@ -521,7 +590,16 @@ void calibration::tick(uint32_t nowMs, bool armed)
         cal.valid = 0;
         store("cal", &cal, sizeof(cal));
         sdr::setGain(cfg::SDR_GAIN);
-        printf("S:cal=off\nS:cal.done=clear\n");
+        {
+            // Back to the defaults (the presets' Medium for an uncalibrated timer).
+            Settings &s = settings::get();
+            s.detector.exitDb = 0;
+            s.detector.enterDb = cfg::DEFAULT_ENTER_DB;
+            s.detector.exitDb = cfg::DEFAULT_EXIT_DB;
+            settings::save();
+            printf("S:cal=off\nS:enter=%.1f\nS:exit=%.1f\nS:cal.ref=%.1f/%.1f\nS:cal.done=clear\n", s.detector.enterDb,
+                   s.detector.exitDb, refEnterDb(), refExitDb());
+        }
         break;
     case Req::NONE: break;
     }

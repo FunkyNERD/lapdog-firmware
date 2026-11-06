@@ -14,13 +14,15 @@
 //               round starts, cal.live_passes as each pass is found, cal.fly_s;
 //               then S:cal.auto=ok|failed and S:cal.done=auto.
 //   cal apply   keep the last ok advice: gain, floor and thresholds saved
-//   cal clear   back to the tracked baseline (thresholds are left as they are)
+//   cal clear   back to the defaults: gain, floor (cfg::DEFAULT_FLOOR_DB, or a
+//               measured one) and thresholds
 //   cal         status
 //
 // Saved in NVS under its own keys, not the Settings blob: "cal" (gain, floor,
 // channel) and "calfloor" (the floor at every gain, for the channel measured).
-// When calibrated, the detector's baseline is the floor at the gain in use,
-// fixed, with calib::MERGE_MS merging; otherwise it tracks, as before.
+// The detector's baseline is always a fixed floor, with calib::MERGE_MS merging:
+// the calibrated (or measured) floor at the gain in use, else cfg::DEFAULT_FLOOR_DB.
+// Version 1 records (before the presets' reference) are converted on load.
 
 #include <stdint.h>
 
@@ -34,6 +36,9 @@ void begin(); // after settings::begin(): load, and set the saved gain
 
 bool valid();
 int gain();
+// The presets' reference (presets.h): what calibration set, else the defaults.
+float refEnterDb();
+float refExitDb();
 float floorDb(); // at the gain in use (from the floor table when it has one)
 
 // Sets up a detector for a session: fixed floor and merging when calibrated,
@@ -43,7 +48,7 @@ void configure(Detector &d);
 // Console requests (any task). false: refused (armed, busy, no floor yet...).
 bool requestFloor();
 bool requestFly(int gain); // -1 = the current gain
-bool requestAuto(int gain); // -1 = the calibrated gain, or calib::AUTO_START_GAIN
+bool requestAuto(int gain); // -1 = the calibrated gain, or cfg::SDR_GAIN
 bool requestStop();
 bool requestApply();
 bool requestClear();

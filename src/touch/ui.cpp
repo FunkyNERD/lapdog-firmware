@@ -29,6 +29,8 @@
 #include "heatstore.h"
 #include "power.h"
 #include "race.h"
+#include "calibration.h"
+#include "presets.h"
 #include "settings.h"
 #include "splash.h"
 #include "theme.h"
@@ -710,7 +712,7 @@ static void buildLive()
     live.signal = lv_bar_create(s);
     lv_obj_set_pos(live.signal, 316, 204);
     lv_obj_set_size(live.signal, 148, 12);
-    lv_bar_set_range(live.signal, 0, 320);
+    lv_bar_set_range(live.signal, 0, 450); // dB x10 above the receiver floor
     lv_obj_set_style_bg_color(live.signal, lv_color_hex(col::SURFACE), LV_PART_MAIN);
     lv_obj_set_style_bg_color(live.signal, lv_color_hex(col::SOFT), LV_PART_INDICATOR);
 
@@ -845,13 +847,12 @@ static void buildSettings()
     }
 }
 
-static const char *sensitivityName(const DetectorParams &d)
+// Presets are steps around the reference: the calibrated thresholds, else the defaults.
+static presets::Kind presetOf(const DetectorParams &d)
 {
-    if (d.enterDb == 14 && d.exitDb == 8) return "Low";
-    if (d.enterDb == 10 && d.exitDb == 5) return "Medium";
-    if (d.enterDb == 6 && d.exitDb == 3) return "High";
-    return "Custom";
+    return presets::of(d.enterDb, d.exitDb, calibration::refEnterDb(), calibration::refExitDb());
 }
+static const char *sensitivityName(const DetectorParams &d) { return presets::name(presetOf(d)); }
 
 static void refreshSettings()
 {
@@ -966,7 +967,6 @@ static struct
     float peakDb;
 } sens;
 
-static constexpr float PRESETS[3][2] = {{14, 8}, {10, 5}, {6, 3}};
 
 static int getEnter() { return (int)(settings::get().detector.enterDb * 10 + 0.5f); }
 static int getExit() { return (int)(settings::get().detector.exitDb * 10 + 0.5f); }
@@ -986,16 +986,19 @@ static void setExit(int v)
 }
 static void fmtDb(int v, char *out, size_t len) { snprintf(out, len, "+%d.%d", v / 10, v % 10); }
 
-static Stepper enterStep = {nullptr, getEnter, setEnter, 5, 5, 300, fmtDb};
-static Stepper exitStep = {nullptr, getExit, setExit, 5, 0, 295, fmtDb};
+// dB above the receiver floor: passes reach 30-40, calibrated enter is ~22.
+static Stepper enterStep = {nullptr, getEnter, setEnter, 5, 5, 450, fmtDb};
+static Stepper exitStep = {nullptr, getExit, setExit, 5, 0, 445, fmtDb};
 
 static void pickPreset(lv_event_t *e)
 {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     DetectorParams &d = settings::get().detector;
+    float enter, exit;
+    presets::apply((presets::Kind)i, calibration::refEnterDb(), calibration::refExitDb(), enter, exit);
     d.exitDb = 0; // order: never let enter <= exit in between
-    d.enterDb = PRESETS[i][0];
-    d.exitDb = PRESETS[i][1];
+    d.enterDb = enter;
+    d.exitDb = exit;
     save();
     refresh(S_SENSITIVITY);
 }
@@ -1013,7 +1016,7 @@ static void buildSensitivity()
     lv_chart_set_type(sens.chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(sens.chart, 120);
     lv_chart_set_update_mode(sens.chart, LV_CHART_UPDATE_MODE_SHIFT);
-    lv_chart_set_axis_range(sens.chart, LV_CHART_AXIS_PRIMARY_Y, 0, 320);
+    lv_chart_set_axis_range(sens.chart, LV_CHART_AXIS_PRIMARY_Y, 0, 480); // dB x10 above the floor
     lv_chart_set_div_line_count(sens.chart, 0, 0);
     fill(sens.chart, col::SURFACE, col::LINE, 12);
     lv_obj_set_style_size(sens.chart, 0, 0, LV_PART_INDICATOR);
@@ -1023,7 +1026,7 @@ static void buildSensitivity()
     sens.exit = lv_chart_add_series(sens.chart, lv_color_hex(col::MUTED), LV_CHART_AXIS_PRIMARY_Y);
     lv_chart_set_all_values(sens.chart, sens.signal, 0);
     lv_obj_t *hint =
-        text(s, &lv_font_montserrat_12, col::MUTED, "Fly a few passes: enter just under the peaks, exit above the floor.");
+        text(s, &lv_font_montserrat_12, col::MUTED, "dB above the receiver floor. Med is the calibrated (or default) level.");
     lv_obj_set_pos(hint, 16, 280);
     lv_obj_set_width(hint, 260);
 
@@ -1046,7 +1049,7 @@ static void refreshSensitivity()
 {
     const DetectorParams &d = settings::get().detector;
     for (int i = 0; i < 3; i++)
-        setSelected(sens.preset[i], d.enterDb == PRESETS[i][0] && d.exitDb == PRESETS[i][1], true);
+        setSelected(sens.preset[i], presetOf(d) == (presets::Kind)i, true);
     stepperRefresh(&enterStep);
     stepperRefresh(&exitStep);
     lv_chart_set_all_values(sens.chart, sens.enter, (int32_t)(d.enterDb * 10));

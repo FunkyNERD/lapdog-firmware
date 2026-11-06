@@ -72,15 +72,23 @@ constexpr uint32_t DEBOUNCE_MS = 30;
 // --- Detection defaults ------------------------------------------------------
 constexpr uint16_t DEFAULT_FREQ_MHZ = 5800;  // mid-band; band edges are less sensitive
 constexpr float DEFAULT_EMA_ALPHA = 0.2f;
-constexpr float DEFAULT_ENTER_DB = 10.0f;    // above the in-room baseline
-constexpr float DEFAULT_EXIT_DB = 5.0f;
+// dB above the receiver floor. A little more sensitive than the three boards calibrated
+// to indoors (enter 21.9-22.7, exit 13.1-15.4; issue #12), so calibration tightens them.
+// Not much more: with exit too low a quad near the gate keeps a peak open for seconds
+// and it's rejected as parked - replaying the sessions, +18/+11 lost most laps of one
+// flight, +20/+13 (with the 5 s parked limit) timed every lap of all three.
+constexpr float DEFAULT_ENTER_DB = 20.0f;
+constexpr float DEFAULT_EXIT_DB = 13.0f;
+// The receiver's own floor, in dBFS: what an uncalibrated timer measures from. At low
+// gain it's the receiver's noise, not the room's: -51.5 to -52.0 on all three boards
+// at gains 12-20. A floor measured with "cal floor" replaces it.
+constexpr float DEFAULT_FLOOR_DB = -52.0f;
 constexpr uint32_t DEFAULT_MIN_LAP_MS = 3000;  // shorter "laps" are a crash or bounce at the gate
-constexpr uint32_t DEFAULT_MAX_PEAK_MS = 1500; // longer peaks are a quad parked at the gate
+// Longer peaks are a quad parked at the gate. A parked quad sits for tens of seconds;
+// 1.5 s also caught slow, wobbly passes near the gate (issue #12).
+constexpr uint32_t DEFAULT_MAX_PEAK_MS = 5000;
 constexpr uint32_t SAMPLE_PERIOD_MS = 5;     // ~200 Hz band-power rate
 constexpr unsigned TIMING_TASK_PRIORITY = 6;  // above the console (5) and the touch UI (3)
-// The in-room baseline follows the level outside peaks: down quickly, up by this
-// fraction per sample (~2.5 s time constant at 200 Hz), never during a peak.
-constexpr float BASELINE_RISE = 0.002f;
 
 // --- SDR (C5) -----------------------------------------------------------------
 // One snapshot per sample: SDR_SAMPLES complex samples at SDR_RATE (0..5 = 80,
@@ -95,7 +103,9 @@ constexpr bool HAS_SDR = false;
 constexpr unsigned SDR_SAMPLES = 1024;
 constexpr unsigned SDR_RATE = 2; // 20 MS/s: ~51 us per snapshot
 constexpr unsigned SDR_BANDWIDTH_MHZ = 20;
-constexpr int SDR_GAIN = 40;     // PHY gain index; -1 = hardware AGC
+// PHY gain index (-1 = hardware AGC). Calibration picked 20, 20 and 12 on the three
+// boards; 40 clipped on every close pass indoors.
+constexpr int SDR_GAIN = 20;
 // A sample this close to the 10-bit limits (-512..511) counts as clipped.
 constexpr unsigned SDR_CLIP_LEVEL = 510;
 constexpr float SDR_STUB_FLOOR_DB = -90.0f; // what the C3's stand-in reads

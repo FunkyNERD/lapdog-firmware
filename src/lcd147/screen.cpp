@@ -647,8 +647,9 @@ static void limitText(const Settings &set, char *out, size_t n)
 static void signalBar(Scene &sc, const Settings &set)
 {
     float db = app::signalDb();
-    int pct = (int)(db / 30.0f * 100);
-    int tick = (int)(set.detector.enterDb / 30.0f * 100);
+    // dB above the receiver floor: passes reach 30-40.
+    int pct = (int)(db / 45.0f * 100);
+    int tick = (int)(set.detector.enterDb / 45.0f * 100);
     sc.pct = (uint8_t)(pct < 0 ? 0 : pct > 100 ? 100 : pct);
     sc.tick = (uint8_t)(tick < 0 ? 0 : tick > 100 ? 100 : tick);
     sc.hot = sc.pct >= sc.tick;
