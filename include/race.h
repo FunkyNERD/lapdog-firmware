@@ -17,8 +17,8 @@
 // The OSD messages follow CMRC's live timing (cmrc.asn.au Goggle OSD Layout),
 // the same rows and wording elrs-race-test broadcasts and LapDog LCD decodes -
 // the row a message is on is what tells LapDog LCD what it is:
-//   row 0   event name            "x THURSDAY BACKYARD w"
-//   row 2   heat name             "x HEAT 4 w"
+//   row 0   event name            "x THURSDAY BACKYARD w"   (until GO; practice: the start pass or 30 s)
+//   row 2   heat name             "x HEAT 4 w"              (likewise)
 //   row 3   position & lap        "P1 | L3"   (the lap now being flown; cleared after 3 s)
 //   row 5   status                "w ARM NOW x" / "w GO! x" / "w FINISHED! x"
 //   row 6-7 race result           "P1" / "T1:02.31"   (total from GO)
@@ -83,6 +83,9 @@ constexpr uint32_t FINISH_UPTIME_MS = 2000;
 constexpr uint32_t LAP_RESULT_UPTIME_MS = 4000;
 constexpr uint32_t LAP_LINE_UPTIME_MS = 3000;
 constexpr uint32_t RESULTS_UPTIME_MS = FINISH_UPTIME_MS; // a disarm's result, rows 6-7
+// Practice: the event and heat names (rows 0, 2) go at the start pass - a race's GO
+// clears them, and practice has none - or after this, if no pass comes first.
+constexpr uint32_t NAMES_UPTIME_MS = 30000;
 
 constexpr size_t EVENT_MAX = 40;
 constexpr size_t PREFIX_MAX = 16;
@@ -192,6 +195,8 @@ public:
         stage_ = s.mode == RACE ? STAGING : PRACTICE_RUN;
         holdMs_ = holdMs;
         clearStatusAt_ = clearLapResultAt_ = clearLapLineAt_ = clearResultsAt_ = 0;
+        clearNamesAt_ = 0;
+        eventUp_ = heatUp_ = false;
         goScheduled_ = false;
         started_ = false;
         timeUp_ = false;
@@ -216,6 +221,7 @@ public:
             upper(s.event, buf, sizeof(buf));
             nameText(buf, text, sizeof(text));
             row(ROW_EVENT, text);
+            eventUp_ = s.mode == PRACTICE; // a race's GO clears it
         }
         if (s.msg.heat)
         {
@@ -224,6 +230,7 @@ public:
             upper(heat, buf, sizeof(buf));
             nameText(buf, text, sizeof(text));
             row(ROW_HEAT, text);
+            heatUp_ = s.mode == PRACTICE;
         }
         if (s.mode == RACE)
         {
@@ -264,6 +271,8 @@ public:
             // Nothing timed yet (or abandoned): wipe the goggles, which also
             // tells LapDog LCD there's no heat.
             clearStatusAt_ = clearLapResultAt_ = clearLapLineAt_ = clearResultsAt_ = 0;
+            clearNamesAt_ = 0;
+            eventUp_ = heatUp_ = false;
             osdClear();
         }
         sink_.flush();
@@ -271,7 +280,11 @@ public:
 
     void tick(uint32_t nowMs)
     {
-        bool cleared = expire(clearStatusAt_, ROW_STATUS, nowMs);
+        // The names' 30 s run from the first tick after arming (arm() has no clock).
+        if ((eventUp_ || heatUp_) && !clearNamesAt_) schedule(clearNamesAt_, nowMs + NAMES_UPTIME_MS);
+        bool cleared = false;
+        if (clearNamesAt_ && (int32_t)(nowMs - clearNamesAt_) >= 0) cleared = clearNames();
+        cleared = expire(clearStatusAt_, ROW_STATUS, nowMs) || cleared;
         cleared = expire(clearLapResultAt_, ROW_LAP_RESULT, nowMs) || cleared;
         cleared = expire(clearLapLineAt_, ROW_LAP, nowMs) || cleared;
         if (clearResultsAt_ && (int32_t)(nowMs - clearResultsAt_) >= 0)
@@ -350,6 +363,8 @@ private:
     uint32_t clearLapResultAt_ = 0;
     uint32_t clearLapLineAt_ = 0;
     uint32_t clearResultsAt_ = 0;
+    uint32_t clearNamesAt_ = 0;
+    bool eventUp_ = false, heatUp_ = false; // practice names still on the goggles
     uint32_t startPassMs_ = 0;       // practice first pass / race holeshot: lap totals count from here
     bool goScheduled_ = false;
     uint32_t goMs_ = 0;
@@ -405,6 +420,18 @@ private:
     }
 
     static void schedule(uint32_t &at, uint32_t when) { at = when ? when : 1; }
+
+    // Takes practice's event and heat names off the goggles (blank rows, so LapDog
+    // LCD keeps its panel). Returns whether there was anything to clear.
+    bool clearNames()
+    {
+        clearNamesAt_ = 0;
+        bool any = eventUp_ || heatUp_;
+        if (eventUp_) row(ROW_EVENT, "");
+        if (heatUp_) row(ROW_HEAT, "");
+        eventUp_ = heatUp_ = false;
+        return any;
+    }
 
     // Clears row r once its deadline has passed. Returns whether it did.
     bool expire(uint32_t &at, uint8_t r, uint32_t nowMs)
@@ -496,6 +523,7 @@ private:
     {
         if (!started_)
         {
+            clearNames(); // practice's "GO": timing has started
             started_ = true;
             lastPassMs_ = startPassMs_ = passMs;
             lapFrame(0, 0, 0);

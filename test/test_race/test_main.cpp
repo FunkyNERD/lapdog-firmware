@@ -135,12 +135,16 @@ void test_practice_first_pass_starts_lap_1()
     TEST_ASSERT_EQUAL(1, laps.size());
     TEST_ASSERT_EQUAL(0, laps[0].lap);
     TEST_ASSERT_EQUAL(0, s.lapsDone());
-    TEST_ASSERT_EQUAL(1, r.osdRows.size());
-    TEST_ASSERT_EQUAL_STRING("3:P1 | L1", r.osdRows[0].c_str()); // lap 1 under way
+    // The start pass takes the event and heat names off (blank rows), then lap 1 is under way.
+    TEST_ASSERT_EQUAL(3, r.osdRows.size());
+    TEST_ASSERT_EQUAL_STRING("0:", r.osdRows[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("2:", r.osdRows[1].c_str());
+    TEST_ASSERT_EQUAL_STRING("3:P1 | L1", r.osdRows[2].c_str());
+    TEST_ASSERT_EQUAL(1, r.clears); // only arm's: the start pass never does a full OSD clear (LapDog LCD keeps its panel)
 
     s.pass(15630);
-    TEST_ASSERT_EQUAL_STRING("3:P1 | L2", r.osdRows[1].c_str());
-    TEST_ASSERT_EQUAL_STRING("15:x L1:14.63 | T14.63 w", r.osdRows[2].c_str());
+    TEST_ASSERT_EQUAL_STRING("3:P1 | L2", r.osdRows[3].c_str());
+    TEST_ASSERT_EQUAL_STRING("15:x L1:14.63 | T14.63 w", r.osdRows[4].c_str());
     s.pass(30000);
     laps = r.of(lapframe::LAP);
     TEST_ASSERT_EQUAL(3, laps.size());
@@ -504,6 +508,58 @@ void test_ignored_not_counted_while_staging()
     TEST_ASSERT_EQUAL(0, s.ignoredCount());
 }
 
+// Practice with no pass for 30 s (on the ground, a crash before the gate): the names
+// go anyway, counted from the first tick. After the start pass nothing more is cleared.
+void test_practice_names_clear_after_30s()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(PRACTICE), 0);
+    r.clear();
+    s.tick(1000); // the clock starts here
+    s.tick(30999);
+    TEST_ASSERT_EQUAL(0, r.osdRows.size());
+    s.tick(31000);
+    TEST_ASSERT_EQUAL(2, r.osdRows.size());
+    TEST_ASSERT_EQUAL_STRING("0:", r.osdRows[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("2:", r.osdRows[1].c_str());
+    TEST_ASSERT_EQUAL(1, r.bursts);
+    r.clear();
+    s.pass(40000); // the start pass: the names are already gone
+    TEST_ASSERT_EQUAL(1, r.osdRows.size());
+    TEST_ASSERT_EQUAL_STRING("3:P1 | L1", r.osdRows[0].c_str());
+    s.tick(80000);
+    for (const auto &row : r.osdRows) TEST_ASSERT_TRUE(row.rfind("0:", 0) != 0 && row.rfind("2:", 0) != 0);
+}
+
+void test_practice_names_off_clear_nothing()
+{
+    Recorder r;
+    Session s(r);
+    Setup st = setup(PRACTICE);
+    st.msg.event = false;
+    st.msg.heat = false;
+    s.arm(st, 0);
+    r.clear();
+    s.tick(1000);
+    s.tick(40000);
+    s.pass(41000);
+    for (const auto &row : r.osdRows) TEST_ASSERT_TRUE(row.rfind("0:", 0) != 0 && row.rfind("2:", 0) != 0);
+}
+
+// A race keeps its names up through staging; GO clears the OSD as before.
+void test_race_names_stay_until_go()
+{
+    Recorder r;
+    Session s(r);
+    s.arm(setup(RACE), 2000);
+    r.clear();
+    s.tick(1000);
+    s.tick(2000); // still staging
+    s.tick(31000 + 2000); // past 30 s would clear practice names: a race's don't move
+    for (const auto &row : r.osdRows) TEST_ASSERT_TRUE(row.rfind("0:", 0) != 0 && row.rfind("2:", 0) != 0);
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -511,6 +567,9 @@ int main()
     RUN_TEST(test_arm_sends_session_and_osd_rows);
     RUN_TEST(test_toggles_silence_rows);
     RUN_TEST(test_practice_first_pass_starts_lap_1);
+    RUN_TEST(test_practice_names_clear_after_30s);
+    RUN_TEST(test_practice_names_off_clear_nothing);
+    RUN_TEST(test_race_names_stay_until_go);
     RUN_TEST(test_best_is_app_only);
     RUN_TEST(test_lap_result_and_status_clear_after_a_while);
     RUN_TEST(test_lap_line_clears_after_3s_each_lap);
