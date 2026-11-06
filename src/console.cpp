@@ -20,6 +20,18 @@
 #include "siglog.h"
 #include "settings.h"
 
+// Which board this build is for: the device ids in devices.json and the release assets
+// (<id>-firmware.bin), so an app knows which image to update it with (lapdog-android#3).
+#if LAPDOG_TOUCH
+static const char *BOARD_ID = "c5-touch";
+#elif LAPDOG_LCD147
+static const char *BOARD_ID = "c5-lcd147";
+#elif CONFIG_IDF_TARGET_ESP32C5
+static const char *BOARD_ID = "c5-mini";
+#else
+static const char *BOARD_ID = "c3-oled";
+#endif
+
 static void printSettings()
 {
     const Settings &s = settings::get();
@@ -30,6 +42,7 @@ static void printSettings()
     const char *state = !app::armed() ? "idle" : app::stage() == race::PRACTICE_RUN ? "practice" : "race";
     printf("S:state=%s\n", state);
     printf("S:fw=%s\n", FIRMWARE_VERSION);
+    printf("S:board=%s\n", BOARD_ID);
     calibration::printSummary();
 }
 
