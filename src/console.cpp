@@ -30,6 +30,7 @@ static void printSettings()
     const char *state = !app::armed() ? "idle" : app::stage() == race::PRACTICE_RUN ? "practice" : "race";
     printf("S:state=%s\n", state);
     printf("S:fw=%s\n", FIRMWARE_VERSION);
+    calibration::printSummary();
 }
 
 // USB output can wedge for good: the driver only sends when the hardware says the
@@ -146,7 +147,7 @@ static bool handleSdr()
     return false;
 }
 
-// "cal [floor|fly [gain]|stop|apply|clear]": receiver calibration (calibration.h).
+// "cal [floor|fly [gain]|auto [gain]|stop|apply|clear]": receiver calibration (calibration.h).
 // Results come later as S:cal.* lines, ending with S:cal.done=<step>.
 static bool handleCal()
 {
@@ -163,6 +164,13 @@ static bool handleCal()
         long n = g ? atol(g) : -1;
         if (g && (n < 0 || n > 127)) return false;
         return calibration::requestFly((int)n);
+    }
+    if (!strcmp(what, "auto"))
+    {
+        char *g = strtok(nullptr, " ");
+        long n = g ? atol(g) : -1;
+        if (g && (n < 0 || n > 127)) return false;
+        return calibration::requestAuto((int)n);
     }
     if (!strcmp(what, "stop")) return calibration::requestStop();
     if (!strcmp(what, "apply")) return calibration::requestApply();

@@ -1,13 +1,13 @@
 #pragma once
 // Status LED, readable with goggles on: slow blink = idle, solid = armed,
-// quick flash = lap.
+// quick flash = lap, double blink = calibrating.
 
 #include <stdint.h>
 
 namespace led
 {
 
-enum Pattern { IDLE, ARMED };
+enum Pattern { IDLE, ARMED, CALIBRATING };
 
 void begin();
 void set(Pattern p);

@@ -20,7 +20,11 @@ static uint32_t shown = ~0u;
 static void write(bool on)
 {
     if (!strip) return;
-    uint32_t rgb = !on ? 0 : flashing ? 0x303030 : pattern == led::ARMED ? 0x003C10 : 0x000A3C;
+    uint32_t rgb = !on                            ? 0
+                   : flashing                     ? 0x303030
+                   : pattern == led::ARMED        ? 0x003C10
+                   : pattern == led::CALIBRATING ? 0x302000 // amber
+                                                  : 0x000A3C;
     if (rgb == shown) return; // the RMT write is not free: only when the colour changes
     shown = rgb;
     led_strip_set_pixel(strip, 0, rgb >> 16, (rgb >> 8) & 0xFF, rgb & 0xFF);
@@ -77,5 +81,11 @@ void led::update(uint32_t nowMs)
     {
     case IDLE: write((nowMs % 2000) < 100); break;
     case ARMED: write(true); break;
+    case CALIBRATING:
+    {
+        uint32_t t = nowMs % 1000; // two short blinks a second
+        write(t < 80 || (t >= 200 && t < 280));
+        break;
+    }
     }
 }

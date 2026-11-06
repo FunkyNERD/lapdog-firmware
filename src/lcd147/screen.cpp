@@ -20,6 +20,8 @@
 #include <string.h>
 
 #include "app.h"
+#include "calibrate.h"
+#include "calibration.h"
 #include "art.h"
 #include "config.h"
 #include "driver/ledc.h"
@@ -382,7 +384,7 @@ static void fitText(char *s, size_t n, const art::Font &f, int maxw, int track16
 // with the last: if it's the same, nothing is sent. (Zeroed first, so the comparison sees no
 // stray bytes.)
 
-enum Kind : uint8_t { K_SPLASH, K_IDLE, K_WAIT, K_LIVE, K_FINISHED };
+enum Kind : uint8_t { K_SPLASH, K_IDLE, K_WAIT, K_LIVE, K_FINISHED, K_CAL };
 enum Tone : uint8_t { T_NORMAL, T_BEST, T_SLOW }; // card and held-lap colouring
 
 struct Card
@@ -498,6 +500,20 @@ static void drawWait(const Scene &sc)
     footer(sc);
 }
 
+// Calibrating (driven from the app or USB): what to do, and how it's going.
+static void drawCal(const Scene &sc)
+{
+    statusRow(sc);
+    text(art::PLEX12B, 160, 44, 14, sc.lapWord, col::MUTED, CENTER, 28);
+    text(art::CHAKRA46, 160, 62, 50, sc.big, sc.hot ? col::OK : col::TEXT, CENTER, 20);
+    text(art::PLEX14, 160, 118, 16, sc.sub, col::MUTED, CENTER);
+    if (sc.pct)
+    {
+        rrect(40, 146, 240, 6, 3, col::SURFACE);
+        rrect(40, 146, 240 * sc.pct / 100 < 6 ? 6 : 240 * sc.pct / 100, 6, 3, col::ACCENT);
+    }
+}
+
 static void drawCard(int x, const Card &c)
 {
     bool best = c.tone == T_BEST;
@@ -564,6 +580,7 @@ static void render(const Scene &sc)
     case K_SPLASH: drawSplash(sc); break;
     case K_IDLE: drawIdle(sc); break;
     case K_WAIT: drawWait(sc); break;
+    case K_CAL: drawCal(sc); break;
     case K_LIVE:
     case K_FINISHED: drawLive(sc); break;
     }
@@ -637,6 +654,39 @@ static void signalBar(Scene &sc, const Settings &set)
     sc.hot = sc.pct >= sc.tick;
 }
 
+static bool composeCal(Scene &sc)
+{
+    calibration::View v = calibration::view();
+    if (v.step == calibration::View::NONE) return false;
+    sc.kind = K_CAL;
+    sc.dot = 1;
+    fmt(sc.status, sizeof(sc.status), "CALIBRATING");
+    switch (v.step)
+    {
+    case calibration::View::FLOOR:
+        fmt(sc.lapWord, sizeof(sc.lapWord), "QUAD OFF");
+        fmt(sc.big, sizeof(sc.big), "FLOOR");
+        fmt(sc.sub, sizeof(sc.sub), "measuring the receiver, gain %u of %u", v.at, v.of);
+        sc.pct = v.of ? (uint8_t)(v.at * 100 / v.of) : 0;
+        break;
+    case calibration::View::FLY:
+        fmt(sc.lapWord, sizeof(sc.lapWord), "FLY LAPS");
+        fmt(sc.big, sizeof(sc.big), "%u %s", v.passes, v.passes == 1 ? "PASS" : "PASSES");
+        if (v.round) fmt(sc.sub, sizeof(sc.sub), "round %u \xC2\xB7 gain %d \xC2\xB7 %u s", v.round, v.gain, v.seconds);
+        else fmt(sc.sub, sizeof(sc.sub), "gain %d \xC2\xB7 %u s", v.gain, v.seconds);
+        break;
+    default:
+        fmt(sc.status, sizeof(sc.status), "CALIBRATION");
+        fmt(sc.lapWord, sizeof(sc.lapWord), "RESULT");
+        sc.hot = v.result == (uint8_t)calib::Verdict::OK;
+        fmt(sc.big, sizeof(sc.big), "%s", sc.hot ? "CALIBRATED" : "NOT DONE");
+        if (sc.hot) fmt(sc.sub, sizeof(sc.sub), "gain %d \xC2\xB7 enter +%.1f dB", v.gain, settings::get().detector.enterDb);
+        else fmt(sc.sub, sizeof(sc.sub), "%s", v.result == (uint8_t)calib::Verdict::TOO_FEW_PASSES ? "not enough passes" : "gain still wrong");
+        break;
+    }
+    return true;
+}
+
 static void composeMain(Scene &sc, const session_view::State &s, uint32_t now)
 {
     memset(&sc, 0, sizeof(sc));
@@ -644,6 +694,7 @@ static void composeMain(Scene &sc, const session_view::State &s, uint32_t now)
     if (set.chan[0]) fmt(sc.chip, sizeof(sc.chip), "%s \xC2\xB7 %u", set.chan, set.freqMhz);
     else fmt(sc.chip, sizeof(sc.chip), "%u MHZ", set.freqMhz);
 
+    if (!s.armed && composeCal(sc)) return;
     if (!s.armed)
     {
         sc.kind = K_IDLE;

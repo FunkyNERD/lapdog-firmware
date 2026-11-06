@@ -10,6 +10,7 @@
 #include "cloud.h"
 #include "config.h"
 #include "esp_log.h"
+#include "led.h"
 #include "nvs.h"
 #include "settings.h"
 
@@ -79,6 +80,7 @@ enum class Req : uint8_t
     NONE,
     FLOOR,
     FLY,
+    AUTO,
     STOP,
     APPLY,
     CLEAR,
@@ -109,6 +111,17 @@ static uint32_t flyStartMs = 0;
 static unsigned flySkip = 0;
 static bool flyDone = false;
 static int lowestClipped = -1; // lowest gain flown this boot that clipped
+static calib::PassCounter passCounter;
+static unsigned livePasses = 0;
+
+// "cal auto": rounds of flying until a result is ok, then apply.
+static bool autoMode = false;
+static unsigned autoRound = 0;
+
+// For the screens and the LED (read from other tasks; a torn read just shows late).
+static calibration::View shown = {};
+static uint32_t lastProgressMs = 0;
+static bool ledShowing = false;
 
 // The last flight's result
 static bool haveAdvice = false;
@@ -164,12 +177,19 @@ static bool request(Req r)
 
 bool calibration::requestFloor() { return state == State::IDLE && sdr::available() && request(Req::FLOOR); }
 
-bool calibration::requestFly(int g)
+static bool requestFlight(int g, Req kind)
 {
     if (state != State::IDLE || !sdr::available() || !haveFloors()) return false;
     if (g > (int)floors.count - 1) return false;
     reqGain = g;
-    return request(Req::FLY);
+    return request(kind);
+}
+
+bool calibration::requestFly(int g) { return requestFlight(g, Req::FLY); }
+
+bool calibration::requestAuto(int g)
+{
+    return requestFlight(g < 0 ? (cal.valid ? cal.gain : calib::AUTO_START_GAIN) : g, Req::AUTO);
 }
 
 bool calibration::requestStop() { return state == State::FLY && request(Req::STOP); }
@@ -193,6 +213,17 @@ static const char *verdictName(calib::Verdict v)
     return "?";
 }
 
+calibration::View calibration::view() { return shown; }
+
+// For "get": enough for an app to know where the timer stands.
+void calibration::printSummary()
+{
+    printf("S:cal=%s\n", cal.valid ? "on" : "off");
+    if (cal.valid) printf("S:cal.gain=%d\nS:cal.floor=%.1f\n", cal.gain, floorDb());
+    printf("S:cal.state=%s\n", state == State::FLOOR ? "floor" : state == State::FLY ? (autoMode ? "auto" : "fly") : "idle");
+    printf("S:cal.floors=%s\n", haveFloors() ? "yes" : "no");
+}
+
 static void printAdvice()
 {
     const calib::Flight &f = lastFlight;
@@ -210,7 +241,7 @@ void calibration::printStatus()
 {
     const Settings &s = settings::get();
     printf("S:cal=%s\n", cal.valid ? "on" : "off");
-    const char *st = state == State::FLOOR ? "floor" : state == State::FLY ? "fly" : "idle";
+    const char *st = state == State::FLOOR ? "floor" : state == State::FLY ? (autoMode ? "auto" : "fly") : "idle";
     printf("S:cal.state=%s\n", st);
     if (cal.valid)
     {
@@ -245,6 +276,8 @@ static void startFloor()
     sweep = {};
     sdr::setGain(0);
     state = State::FLOOR;
+    shown = {};
+    shown.step = calibration::View::FLOOR;
     printf("S:cal.started=floor\n");
 }
 
@@ -258,6 +291,8 @@ static void startFly(int g)
         return;
     }
     rec->reset();
+    passCounter.reset();
+    livePasses = 0;
     flyGain = g < 0 ? sdr::gain() : g;
     if (flyGain < 0) flyGain = cfg::SDR_GAIN; // the AGC: fly at the default instead
     sdr::setGain(flyGain);
@@ -265,7 +300,13 @@ static void startFly(int g)
     flyStartMs = 0;
     flyDone = false;
     state = State::FLY;
-    printf("S:cal.started=fly\nS:cal.flown_gain=%d\n", flyGain);
+    shown.step = calibration::View::FLY;
+    shown.round = (uint8_t)(autoMode ? autoRound : 0);
+    shown.gain = (int8_t)flyGain;
+    shown.passes = 0;
+    shown.seconds = 0;
+    // One line per round, so an app knows which round at which gain (0 = a single "cal fly").
+    printf("S:cal.started=fly\nS:cal.round=%u %d\n", autoMode ? autoRound : 0, flyGain);
 }
 
 static void freeFly()
@@ -276,7 +317,28 @@ static void freeFly()
     buckets = nullptr;
 }
 
-static void finishFly()
+static void doApply()
+{
+    Settings &s = settings::get();
+    cal = {CAL_VERSION, 1, (int16_t)lastGain, s.freqMhz, floors.db[lastGain]};
+    store("cal", &cal, sizeof(cal));
+    s.detector.enterDb = roundf(lastAdvice.enterDb * 10) / 10;
+    s.detector.exitDb = roundf(lastAdvice.exitDb * 10) / 10;
+    settings::save();
+    sdr::setGain(lastGain);
+    printf("S:cal=on\nS:cal.gain=%d\nS:cal.floor=%.1f\nS:enter=%.1f\nS:exit=%.1f\nS:cal.done=apply\n", cal.gain,
+           cal.floorDb, s.detector.enterDb, s.detector.exitDb);
+}
+
+static void showResult(uint32_t nowMs, uint8_t result)
+{
+    shown.step = calibration::View::RESULT;
+    shown.result = result;
+    shown.gain = (int8_t)lastGain;
+    shown.until = nowMs + 20000;
+}
+
+static void finishFly(uint32_t nowMs)
 {
     lastFlight = calib::analyse(*rec);
     lastGain = flyGain;
@@ -284,12 +346,36 @@ static void finishFly()
     if (lastFlight.clippedPasses && (lowestClipped < 0 || flyGain < lowestClipped)) lowestClipped = flyGain;
     lastAdvice = calib::advise(lastFlight, floor, flyGain, floors.count - 1, lowestClipped);
     haveAdvice = true;
-    freeFly();
     state = State::IDLE;
     // The next "cal fly" defaults to the suggested gain.
     if (lastAdvice.gain != flyGain) sdr::setGain(lastAdvice.gain);
     printAdvice();
     printf("S:cal.done=fly\n");
+    if (!autoMode)
+    {
+        freeFly();
+        showResult(nowMs, (uint8_t)lastAdvice.verdict);
+        return;
+    }
+    if (lastAdvice.verdict == calib::Verdict::OK)
+    {
+        autoMode = false;
+        freeFly();
+        doApply();
+        showResult(nowMs, (uint8_t)calib::Verdict::OK);
+        printf("S:cal.auto=ok\nS:cal.done=auto\n");
+        return;
+    }
+    if (autoRound < calib::AUTO_ROUNDS)
+    {
+        autoRound++;
+        startFly(lastAdvice.gain); // keeps the buffers
+        return;
+    }
+    autoMode = false;
+    freeFly();
+    showResult(nowMs, (uint8_t)lastAdvice.verdict);
+    printf("S:cal.auto=failed\nS:cal.done=auto\n");
 }
 
 void calibration::sample(uint32_t nowMs, float db, const sdr::Snapshot &s)
@@ -331,15 +417,24 @@ void calibration::sample(uint32_t nowMs, float db, const sdr::Snapshot &s)
         }
         if (!flyStartMs) flyStartMs = nowMs ? nowMs : 1;
         rec->add(nowMs, db, s.clipped > 0);
-        if (nowMs - flyStartMs >= FLY_MAX_MS || rec->size() >= FLY_BUCKETS) flyDone = true;
+        if (unsigned n = passCounter.update(*rec))
+        {
+            livePasses += n;
+            shown.passes = (uint8_t)(livePasses > 255 ? 255 : livePasses);
+            printf("S:cal.live_passes=%u\n", livePasses);
+        }
+        uint32_t limit = autoMode ? calib::AUTO_ROUND_MS : FLY_MAX_MS;
+        if (nowMs - flyStartMs >= limit || rec->size() >= FLY_BUCKETS) flyDone = true;
+        if (autoMode && livePasses >= calib::AUTO_PASSES) flyDone = true;
     }
 }
 
 void calibration::tick(uint32_t nowMs, bool armed)
 {
-    (void)nowMs;
     if (armed && state != State::IDLE)
     {
+        autoMode = false;
+        shown = {};
         // Armed from the button mid-calibration: the session wins.
         if (state == State::FLOOR)
         {
@@ -365,7 +460,34 @@ void calibration::tick(uint32_t nowMs, bool armed)
         if (g < floors.count) printf("S:cal.floor=%.1f\nS:cal.floor_gain=%d\n", floors.db[g], g);
         printf("S:cal.done=floor\n");
     }
-    if (state == State::FLY && flyDone) finishFly();
+    if (state == State::FLY && flyDone) finishFly(nowMs);
+
+    // Progress, about once a second, for an app to show (and say).
+    if (state != State::IDLE && nowMs - lastProgressMs >= 1000)
+    {
+        lastProgressMs = nowMs;
+        if (state == State::FLOOR && sweepMax)
+        {
+            shown.at = (uint8_t)sweepGain;
+            shown.of = (uint8_t)(sweepMax + 1);
+            printf("S:cal.floor_at=%d/%d\n", sweepGain, sweepMax + 1);
+        }
+        else if (state == State::FLY && flyStartMs)
+        {
+            shown.seconds = (uint16_t)((nowMs - flyStartMs) / 1000);
+            printf("S:cal.fly_s=%u\n", shown.seconds);
+        }
+    }
+    if (shown.step == calibration::View::RESULT && (int32_t)(nowMs - shown.until) > 0) shown = {};
+    if (shown.step == calibration::View::FLOOR && state == State::IDLE) shown = {};
+
+    // The LED: its own pattern while calibrating; the session's otherwise.
+    bool showLed = state != State::IDLE && !armed;
+    if (showLed != ledShowing)
+    {
+        ledShowing = showLed;
+        if (!armed) led::set(showLed ? led::CALIBRATING : led::IDLE);
+    }
 
     Req r = req;
     if (r == Req::NONE) return;
@@ -373,23 +495,25 @@ void calibration::tick(uint32_t nowMs, bool armed)
     switch (r)
     {
     case Req::FLOOR: startFloor(); break;
-    case Req::FLY: startFly(reqGain); break;
+    case Req::FLY:
+        autoMode = false;
+        startFly(reqGain);
+        break;
+    case Req::AUTO:
+        autoMode = true;
+        autoRound = 1;
+        startFly(reqGain);
+        break;
     case Req::STOP:
-        if (state == State::FLY) flyDone = true; // finished on the next tick
+        if (state == State::FLY)
+        {
+            flyDone = true; // finished on the next tick
+            autoMode = false; // and no more rounds
+        }
         break;
     case Req::APPLY:
-    {
-        Settings &s = settings::get();
-        cal = {CAL_VERSION, 1, (int16_t)lastGain, s.freqMhz, floors.db[lastGain]};
-        store("cal", &cal, sizeof(cal));
-        s.detector.enterDb = roundf(lastAdvice.enterDb * 10) / 10;
-        s.detector.exitDb = roundf(lastAdvice.exitDb * 10) / 10;
-        settings::save();
-        sdr::setGain(lastGain);
-        printf("S:cal=on\nS:cal.gain=%d\nS:cal.floor=%.1f\nS:enter=%.1f\nS:exit=%.1f\nS:cal.done=apply\n", cal.gain,
-               cal.floorDb, s.detector.enterDb, s.detector.exitDb);
+        doApply();
         break;
-    }
     case Req::CLEAR:
         cal.valid = 0;
         store("cal", &cal, sizeof(cal));

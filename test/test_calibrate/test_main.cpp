@@ -312,6 +312,41 @@ void test_session_quad_off_is_quiet()
     TEST_ASSERT_EQUAL(0, r.passes + r.tooSoon + r.tooLong);
 }
 
+// Live counting during the gain-20 flight: close to what analyse() finds at the end.
+void test_session_live_pass_count()
+{
+    calib::Recorder rec(buckets, 4000);
+    calib::PassCounter pc;
+    pc.reset();
+    unsigned live = 0;
+    for (const Sample &s : session["fly20"])
+    {
+        rec.add(s.ms, s.db, s.clipped);
+        live += pc.update(rec);
+    }
+    unsigned final = calib::analyse(rec).passes;
+    char msg[64];
+    snprintf(msg, sizeof(msg), "live %u, final %u", live, final);
+    TEST_MESSAGE(msg);
+    TEST_ASSERT_UINT_WITHIN_MESSAGE(3, final, live, msg);
+}
+
+void test_live_count_on_synthetic_laps()
+{
+    calib::Recorder rec(buckets, 4000);
+    calib::PassCounter pc;
+    pc.reset();
+    unsigned live = 0;
+    for (uint32_t t = 0; t < 6 * 8000 + 4000; t += 8)
+    {
+        uint32_t inLap = t % 8000;
+        bool atGate = t >= 4000 && inLap < 300;
+        rec.add(t, atGate ? -12.0f : -40.0f, false);
+        live += pc.update(rec);
+    }
+    TEST_ASSERT_EQUAL(6, live);
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -326,6 +361,7 @@ int main()
     RUN_TEST(test_too_few_passes);
     RUN_TEST(test_low_contrast_is_flagged);
     RUN_TEST(test_fixed_baseline_survives_reset);
+    RUN_TEST(test_live_count_on_synthetic_laps);
     if (!loadSession())
     {
         printf("test/data/session1.txt not found\n");
@@ -337,5 +373,6 @@ int main()
     RUN_TEST(test_session_gain20_times_the_laps);
     RUN_TEST(test_session_old_settings_reject_the_laps);
     RUN_TEST(test_session_quad_off_is_quiet);
+    RUN_TEST(test_session_live_pass_count);
     return UNITY_END();
 }

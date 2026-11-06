@@ -38,6 +38,12 @@ constexpr float EXIT_FRACTION = 0.35f;
 // re-entered within 80-330 ms; separate events (gate hit and retry, a section near
 // the gate) were 520 ms or more apart. One session's worth - check it again.
 constexpr uint32_t MERGE_MS = 400;
+// "cal auto": a round ends after AUTO_PASSES passes (counted live) or AUTO_ROUND_MS,
+// and re-flies at the advised gain up to AUTO_ROUNDS times.
+constexpr unsigned AUTO_PASSES = 6;
+constexpr uint32_t AUTO_ROUND_MS = 90000;
+constexpr unsigned AUTO_ROUNDS = 3;
+constexpr int AUTO_START_GAIN = 20; // session 1-2 on the touch timer; the rounds adjust it
 
 // Histogram for medians without sorting: HIST_STEP_DB bins over HIST_MIN..MAX dBFS.
 constexpr float HIST_MIN_DB = -100.0f;
@@ -143,30 +149,63 @@ struct Flight
     float strongestPassDb;
 };
 
-// The gate passes in a flight: envelope maxima PASS_RISE_DB above the in-flight
-// level, each the highest within PASS_WINDOW_MS either side (ties: the first).
+// Is bucket i a gate pass: PASS_RISE_DB above the in-flight level and the highest
+// within PASS_WINDOW_MS either side (ties: the first)? Buckets past the end count
+// as lower, so only ask about i once i + window has closed (see PassCounter).
+inline bool isPassAt(const Recorder &r, int i, float inFlightDb)
+{
+    const int w = (int)(PASS_WINDOW_MS / BUCKET_MS);
+    const int n = (int)r.size();
+    float v = r[i].maxDb;
+    if (v < inFlightDb + PASS_RISE_DB) return false;
+    for (int j = i - w; j <= i + w; j++)
+    {
+        if (j < 0 || j >= n || j == i) continue;
+        if (j < i ? r[j].maxDb >= v : r[j].maxDb > v) return false;
+    }
+    return true;
+}
+
+// Counts passes while a flight is recorded, for progress ("one... two..."): each
+// bucket is judged once its window has closed, against the in-flight level so far.
+// It runs PASS_WINDOW_MS behind, and the in-flight level settles as the flight goes
+// on, so analyse() at the end has the final word.
+class PassCounter
+{
+public:
+    void reset() { next_ = 0; }
+    // After Recorder::add(); returns how many passes were found just now.
+    unsigned update(const Recorder &r)
+    {
+        const int w = (int)(PASS_WINDOW_MS / BUCKET_MS);
+        int closed = (int)r.size() - 1; // the last bucket is still filling
+        unsigned found = 0;
+        if (next_ + w >= closed) return 0;
+        float flight = r.medianDb();
+        for (; next_ + w < closed; next_++)
+            if (isPassAt(r, next_, flight)) found++;
+        return found;
+    }
+
+private:
+    int next_ = 0;
+};
+
+// The gate passes in a flight: the buckets isPassAt() picks.
 inline Flight analyse(const Recorder &r)
 {
     Flight f = {};
     f.inFlightDb = r.medianDb();
     f.passDb = f.weakestPassDb = f.strongestPassDb = NAN;
     if (!r.size()) return f;
-    const int w = (int)(PASS_WINDOW_MS / BUCKET_MS);
     const int n = (int)r.size();
     // Pass levels for the median: at most one per window, so few; keep a small sorted list.
     constexpr unsigned MAX_PASSES = 64;
     float levels[MAX_PASSES];
     for (int i = 0; i < n; i++)
     {
+        if (!isPassAt(r, i, f.inFlightDb)) continue;
         float v = r[i].maxDb;
-        if (v < f.inFlightDb + PASS_RISE_DB) continue;
-        bool best = true;
-        for (int j = i - w; best && j <= i + w; j++)
-        {
-            if (j < 0 || j >= n || j == i) continue;
-            if (j < i ? r[j].maxDb >= v : r[j].maxDb > v) best = false;
-        }
-        if (!best) continue;
         bool clipped = false;
         for (int j = i - 2; j <= i + 2; j++)
             if (j >= 0 && j < n && r[j].clipped) clipped = true;

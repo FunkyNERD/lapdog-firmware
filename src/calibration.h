@@ -8,6 +8,11 @@
 //               gain), then "cal stop" (or it stops by itself after 2 min);
 //               prints the advice: lower/raise the gain and fly again, more
 //               laps, or ok with enter/exit
+//   cal auto [g] hands-free: rounds of "cal fly" that end after 6 passes (or
+//               90 s), re-fly at the advised gain (3 rounds at most), and apply
+//               the first ok result. Progress: S:cal.round=<n> <gain> as each
+//               round starts, cal.live_passes as each pass is found, cal.fly_s;
+//               then S:cal.auto=ok|failed and S:cal.done=auto.
 //   cal apply   keep the last ok advice: gain, floor and thresholds saved
 //   cal clear   back to the tracked baseline (thresholds are left as they are)
 //   cal         status
@@ -38,10 +43,27 @@ void configure(Detector &d);
 // Console requests (any task). false: refused (armed, busy, no floor yet...).
 bool requestFloor();
 bool requestFly(int gain); // -1 = the current gain
+bool requestAuto(int gain); // -1 = the calibrated gain, or calib::AUTO_START_GAIN
 bool requestStop();
 bool requestApply();
 bool requestClear();
 void printStatus();
+void printSummary(); // the few lines "get" adds
+
+// What the screens show while calibrating, and for a while after.
+struct View
+{
+    enum Step : uint8_t { NONE, FLOOR, FLY, RESULT };
+    uint8_t step;
+    uint8_t at, of;  // floor: gains done of all
+    uint8_t round;   // fly: round of "cal auto" (0 = a single "cal fly")
+    uint8_t passes;  // fly: passes found so far
+    int8_t gain;
+    uint16_t seconds;
+    uint8_t result;  // RESULT: a calib::Verdict
+    uint32_t until;  // RESULT: shown until (ms)
+};
+View view();
 
 // Timing loop.
 bool active(); // wants the radio
