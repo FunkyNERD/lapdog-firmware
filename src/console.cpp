@@ -108,6 +108,8 @@ static bool handleSdr()
         printf("S:sdr.level=%.1f\n", app::signalDb());
         printf("S:sdr.dbfs=%.1f\n", sdr::levelDbfs());
         printf("S:sdr.errors=%lu\n", (unsigned long)sdr::captureErrors());
+        printf("S:sdr.dead=%lu\nS:sdr.dead_resets=%lu\n", (unsigned long)sdr::deadCaptures(),
+               (unsigned long)sdr::deadResets());
         sdr::Snapshot sn = sdr::lastSnapshot();
         printf("S:sdr.peak=%u\nS:sdr.peak_max=%u\n", sn.peak, sdr::takePeak()); // max since the last "sdr"
         printf("S:sdr.clip=%u\nS:sdr.clipped=%lu\n", sn.clipped, (unsigned long)sdr::clippedCaptures());

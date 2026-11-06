@@ -129,6 +129,14 @@ static float snapshotDb(const uint32_t *iq, unsigned n)
     return 10.0f * log10f(p + 1e-12f);
 }
 
+// A snapshot with no power left after the DC is removed (snapshotDb's -120 dB).
+static constexpr float DEAD_DB = -110.0f;
+static constexpr unsigned DEAD_RESET = 3; // in a row: set the receiver up again
+static uint32_t dead = 0, deadResetCount = 0;
+static unsigned deadRun = 0;
+uint32_t sdr::deadCaptures() { return dead; }
+uint32_t sdr::deadResets() { return deadResetCount; }
+
 static volatile bool dumpNext = false;
 static uint32_t captures = 0, captureUs = 0;
 void sdr::stats(uint32_t &n, uint32_t &avgUs, uint32_t &recals)
@@ -157,9 +165,25 @@ float sdr::bandPowerDb(uint32_t nowMs)
             for (int i = 0; i < 16; i++) printf(" %08lx", (unsigned long)iq[i]);
             printf("\n");
         }
-        if (ok)
+        float db = ok ? snapshotDb(iq, cfg::SDR_SAMPLES) : 0;
+        bool isDead = ok && db <= DEAD_DB;
+        if (isDead)
         {
-            lastDb = snapshotDb(iq, cfg::SDR_SAMPLES);
+            // Every sample the same: the receiver isn't receiving (seen in runs of up to
+            // 9 right after a burst, issue #12). Keep the last level instead - nine of
+            // these once dragged a tracked baseline 40 dB under the floor for good.
+            dead++;
+            if (++deadRun == DEAD_RESET)
+            {
+                esp_sdr_invalidate(); // set the receiver up again on the next capture
+                esp_sdr_prepare();
+                deadResetCount++;
+            }
+        }
+        else if (ok)
+        {
+            deadRun = 0;
+            lastDb = db;
             snap.sinceBegin = sinceBegin;
             if (sinceBegin < 0xFFFF) sinceBegin++;
         }
@@ -202,6 +226,8 @@ float sdr::bandPowerDb(uint32_t nowMs)
 }
 
 void sdr::setGain(int) {}
+uint32_t sdr::deadCaptures() { return 0; }
+uint32_t sdr::deadResets() { return 0; }
 void sdr::dump() {}
 void sdr::stats(uint32_t &n, uint32_t &avgUs, uint32_t &recals) { n = avgUs = recals = 0; }
 int sdr::gain() { return -1; }
