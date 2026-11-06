@@ -158,6 +158,9 @@ void calibration::configure(Detector &d)
 {
     if (cal.valid)
     {
+        // A session times at the calibrated gain, whatever a calibration round (or
+        // "sdr gain") left the radio at: the thresholds were measured there.
+        if (state == State::IDLE && sdr::gain() != cal.gain) sdr::setGain(cal.gain);
         d.setBaseline(floorDb());
         d.mergeWithin(calib::MERGE_MS);
     }
