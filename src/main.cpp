@@ -9,6 +9,7 @@
 #include "app.h"
 #include "bootlog.h"
 #include "button.h"
+#include "calibration.h"
 #include "cloud.h"
 #include "config.h"
 #include "console.h"
@@ -94,6 +95,14 @@ void app::requestRestart() { send(CMD_RESTART); }
 
 static uint32_t millis() { return (uint32_t)(esp_timer_get_time() / 1000); }
 
+// A detector for the current settings: a fixed floor when calibrated, else tracked.
+static Detector newDetector()
+{
+    Detector d(timer_settings::detectorParams(settings::get()));
+    calibration::configure(d);
+    return d;
+}
+
 static void disarm()
 {
     session.disarm(millis());
@@ -122,8 +131,7 @@ static void arm(const app::ArmRequest &r, uint16_t heat, Detector &det)
         else setup.timeS = r.timeS;
     }
     lastArm = r;
-    det = Detector(timer_settings::detectorParams(s));
-    det.trackBaseline(cfg::BASELINE_RISE);
+    det = newDetector();
     idleBeatsUntil = 0;
     sdr::begin(s.freqMhz);
     cloud::armContext(setup.event, setup.heatPrefix);
@@ -184,6 +192,7 @@ extern "C" void app_main()
 
     display::bootStep("LOADING SETTINGS");
     settings::begin();
+    calibration::begin();
     bootlog::mark("settings");
 
     display::bootStep("PREPARING SCREENS");
@@ -214,7 +223,7 @@ extern "C" void app_main()
     bootlog::mark("calibrated");
     display::bootDone();
 
-    Detector det(timer_settings::detectorParams(settings::get()));
+    Detector det = newDetector();
     led::set(led::IDLE);
     if (cfg::BOOT_ARMED) armNewHeat(buttonArm(), det);
     uint32_t now = millis();
@@ -248,14 +257,13 @@ extern "C" void app_main()
         }
 
         // Live signal for calibration works idle too: the radio is free then.
-        bool wantIdleSdr = !app::armed() && (rssiStream || liveWanted || siglog::on()) && !cloud::busy();
+        bool wantIdleSdr = !app::armed() && (rssiStream || liveWanted || siglog::on() || calibration::active()) && !cloud::busy();
         if (wantIdleSdr != calibrating)
         {
             calibrating = wantIdleSdr;
             if (calibrating)
             {
-                det = Detector(timer_settings::detectorParams(settings::get()));
-                det.trackBaseline(cfg::BASELINE_RISE);
+                det = newDetector();
                 sdr::begin(settings::get().freqMhz);
             }
             else if (!app::armed())
@@ -268,6 +276,7 @@ extern "C" void app_main()
             settings::save();
         }
         cloud::tick(); // website sync's NVS writes (its task's stack is in PSRAM)
+        calibration::tick(now, app::armed());
 
         if (simRequested)
         {
@@ -279,6 +288,7 @@ extern "C" void app_main()
         {
             Pass p;
             float db = sdr::bandPowerDb(now);
+            if (calibration::active()) calibration::sample(now, db, sdr::lastSnapshot());
             bool wasInPeak = det.inPeak();
             PassResult r = det.feed(db, now, p);
             if (r == PassResult::PASS && app::armed())

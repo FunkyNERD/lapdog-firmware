@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "calibration.h"
 #include "bootlog.h"
 #include "cloud.h"
 #include "config.h"
@@ -143,6 +144,30 @@ static bool handleSdr()
     return false;
 }
 
+// "cal [floor|fly [gain]|stop|apply|clear]": receiver calibration (calibration.h).
+// Results come later as S:cal.* lines, ending with S:cal.done=<step>.
+static bool handleCal()
+{
+    char *what = strtok(nullptr, " ");
+    if (!what)
+    {
+        calibration::printStatus();
+        return true;
+    }
+    if (!strcmp(what, "floor")) return calibration::requestFloor();
+    if (!strcmp(what, "fly"))
+    {
+        char *g = strtok(nullptr, " ");
+        long n = g ? atol(g) : -1;
+        if (g && (n < 0 || n > 127)) return false;
+        return calibration::requestFly((int)n);
+    }
+    if (!strcmp(what, "stop")) return calibration::requestStop();
+    if (!strcmp(what, "apply")) return calibration::requestApply();
+    if (!strcmp(what, "clear")) return calibration::requestClear();
+    return false;
+}
+
 static bool handleArm()
 {
     char *what = strtok(nullptr, " ");
@@ -203,6 +228,7 @@ static void handleLine(char *line)
     }
     else if (!strcmp(cmd, "disarm")) app::requestDisarm();
     else if (!strcmp(cmd, "sdr")) ok = handleSdr();
+    else if (!strcmp(cmd, "cal")) ok = handleCal();
     else if (!strcmp(cmd, "heat"))
     {
         char *v = strtok(nullptr, " ");
