@@ -48,6 +48,19 @@ void sdr::end() { isRunning = false; }
 uint32_t sdr::captureErrors() { return errors; }
 float sdr::levelDbfs() { return lastDb; }
 unsigned sdr::bandwidth() { return bandwidthMhz; }
+static uint16_t sinceBegin = 0;
+static sdr::Snapshot snap = {};
+static uint32_t clippedCount = 0;
+static uint16_t peakHold = 0;
+
+sdr::Snapshot sdr::lastSnapshot() { return snap; }
+uint32_t sdr::clippedCaptures() { return clippedCount; }
+uint16_t sdr::takePeak()
+{
+    uint16_t p = peakHold;
+    peakHold = 0;
+    return p;
+}
 
 #if CONFIG_IDF_TARGET_ESP32C5
 
@@ -78,20 +91,32 @@ bool sdr::begin(uint16_t freqMhz)
     esp_sdr_set_frequency(freqMhz);
     esp_sdr_invalidate(); // after a burst the BT/Wi-Fi stacks have reset the PHY
     esp_sdr_prepare();
+    sinceBegin = 0;
     isRunning = true;
     return true;
 }
 
 // Mean power of one snapshot, DC (the receiver's own offset) removed, in dB
-// relative to a full-scale 10-bit sample.
+// relative to a full-scale 10-bit sample. Also fills in snap's raw peak and clip count.
 static float snapshotDb(const uint32_t *iq, unsigned n)
 {
     int32_t sumI = 0, sumQ = 0;
+    unsigned peak = 0, clipped = 0;
     for (unsigned j = 0; j < n; j++)
     {
-        sumI += ((int32_t)(iq[j] << 22)) >> 22;
-        sumQ += ((int32_t)(iq[j] << 12)) >> 22;
+        int32_t i = ((int32_t)(iq[j] << 22)) >> 22;
+        int32_t q = ((int32_t)(iq[j] << 12)) >> 22;
+        sumI += i;
+        sumQ += q;
+        unsigned ai = (unsigned)(i < 0 ? -i : i), aq = (unsigned)(q < 0 ? -q : q);
+        unsigned m = ai > aq ? ai : aq;
+        if (m > peak) peak = m;
+        if (m >= cfg::SDR_CLIP_LEVEL) clipped++;
     }
+    snap.peak = (uint16_t)(peak > 511 ? 511 : peak); // -512 reads as full scale too
+    snap.clipped = (uint16_t)clipped;
+    if (clipped) clippedCount++;
+    if (snap.peak > peakHold) peakHold = snap.peak;
     float mi = (float)sumI / n, mq = (float)sumQ / n;
     float p = 0;
     for (unsigned j = 0; j < n; j++)
@@ -132,7 +157,12 @@ float sdr::bandPowerDb(uint32_t nowMs)
             for (int i = 0; i < 16; i++) printf(" %08lx", (unsigned long)iq[i]);
             printf("\n");
         }
-        if (ok) lastDb = snapshotDb(iq, cfg::SDR_SAMPLES);
+        if (ok)
+        {
+            lastDb = snapshotDb(iq, cfg::SDR_SAMPLES);
+            snap.sinceBegin = sinceBegin;
+            if (sinceBegin < 0xFFFF) sinceBegin++;
+        }
         else if (++errors % 100 == 1) ESP_LOGW(TAG, "incomplete capture (%lu so far)", (unsigned long)errors);
     }
     return lastDb + simBump(nowMs);

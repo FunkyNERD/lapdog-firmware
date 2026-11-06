@@ -38,4 +38,16 @@ float levelDbfs();        // the last snapshot's power, dB relative to full scal
 void stats(uint32_t &captures, uint32_t &avgUs, uint32_t &recalibrations); // since the last call
 void dump();              // print the next snapshot's first raw words ("D:" line)
 
+// Clipping checks (issue #12). Figures from the raw ADC words, before the DC is
+// taken off: a saturated input pins samples at the 10-bit limits.
+struct Snapshot
+{
+    uint16_t peak;       // largest |I| or |Q| (511 = full scale)
+    uint16_t clipped;    // samples with |I| or |Q| >= cfg::SDR_CLIP_LEVEL
+    uint16_t sinceBegin; // captures since the last begin() (0 = the first after a burst)
+};
+Snapshot lastSnapshot();
+uint32_t clippedCaptures(); // snapshots with any clipped sample, since boot
+uint16_t takePeak();        // largest peak since the last call
+
 } // namespace sdr

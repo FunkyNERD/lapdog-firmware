@@ -24,6 +24,7 @@
 #include "outputs.h"
 #include "race.h"
 #include "sdr.h"
+#include "siglog.h"
 #include "settings.h"
 #include "vrxc_msp.h"
 
@@ -247,7 +248,7 @@ extern "C" void app_main()
         }
 
         // Live signal for calibration works idle too: the radio is free then.
-        bool wantIdleSdr = !app::armed() && (rssiStream || liveWanted) && !cloud::busy();
+        bool wantIdleSdr = !app::armed() && (rssiStream || liveWanted || siglog::on()) && !cloud::busy();
         if (wantIdleSdr != calibrating)
         {
             calibrating = wantIdleSdr;
@@ -277,7 +278,9 @@ extern "C" void app_main()
         if (app::armed() || calibrating)
         {
             Pass p;
-            PassResult r = det.feed(sdr::bandPowerDb(now), now, p);
+            float db = sdr::bandPowerDb(now);
+            bool wasInPeak = det.inPeak();
+            PassResult r = det.feed(db, now, p);
             if (r == PassResult::PASS && app::armed())
             {
                 led::flash(now);
@@ -290,6 +293,17 @@ extern "C" void app_main()
                 session.ignored(soon ? lapframe::IGNORED_TOO_SOON : lapframe::IGNORED_TOO_LONG,
                                 soon ? p.lapMs : p.durationMs);
                 ESP_LOGI(TAG, "pass ignored: %s", soon ? "too soon" : "too long (parked?)");
+            }
+            if (siglog::on())
+            {
+                sdr::Snapshot sn = sdr::lastSnapshot();
+                char ev = r == PassResult::PASS       ? 'P'
+                          : r == PassResult::TOO_SOON ? 'S'
+                          : r == PassResult::TOO_LONG ? 'L'
+                          : !wasInPeak && det.inPeak() ? 'E'
+                                                       : '-';
+                siglog::push({now, db, det.baseline(), det.smoothed() - det.baseline(), (int16_t)sdr::gain(), sn.peak,
+                              sn.clipped, sn.sinceBegin, ev});
             }
             liveDb = det.smoothed() - det.baseline();
             if (rssiStream && now - lastRssi >= 50)

@@ -96,6 +96,8 @@ constexpr unsigned SDR_SAMPLES = 1024;
 constexpr unsigned SDR_RATE = 2; // 20 MS/s: ~51 us per snapshot
 constexpr unsigned SDR_BANDWIDTH_MHZ = 20;
 constexpr int SDR_GAIN = 40;     // PHY gain index; -1 = hardware AGC
+// A sample this close to the 10-bit limits (-512..511) counts as clipped.
+constexpr unsigned SDR_CLIP_LEVEL = 510;
 constexpr float SDR_STUB_FLOOR_DB = -90.0f; // what the C3's stand-in reads
 
 // --- Outputs -----------------------------------------------------------------

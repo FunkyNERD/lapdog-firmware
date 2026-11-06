@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdr.h"
+#include "siglog.h"
 #include "settings.h"
 
 static void printSettings()
@@ -85,7 +86,8 @@ static void printUsbWatch(const char *which, const UsbWatch &w)
 }
 
 // "sdr": receiver state. "sdr gain <index|auto>", "sdr bw <MHz|0>": bring-up
-// tuning, applied between captures and not saved.
+// tuning, applied between captures and not saved. "sdr log on|off": the
+// full-rate L: stream (siglog.h); it runs the receiver while idle too.
 static bool handleSdr()
 {
     char *what = strtok(nullptr, " ");
@@ -105,6 +107,10 @@ static bool handleSdr()
         printf("S:sdr.level=%.1f\n", app::signalDb());
         printf("S:sdr.dbfs=%.1f\n", sdr::levelDbfs());
         printf("S:sdr.errors=%lu\n", (unsigned long)sdr::captureErrors());
+        sdr::Snapshot sn = sdr::lastSnapshot();
+        printf("S:sdr.peak=%u\nS:sdr.peak_max=%u\n", sn.peak, sdr::takePeak()); // max since the last "sdr"
+        printf("S:sdr.clip=%u\nS:sdr.clipped=%lu\n", sn.clipped, (unsigned long)sdr::clippedCaptures());
+        printf("S:sdr.log=%s\n", siglog::on() ? "on" : "off");
         uint32_t n, us, recals;
         sdr::stats(n, us, recals);
         printf("S:sdr.captures=%lu\nS:sdr.capture_us=%lu\nS:sdr.recals=%lu\n", (unsigned long)n, (unsigned long)us,
@@ -129,6 +135,11 @@ static bool handleSdr()
         return true;
     }
     if (!strcmp(what, "bw")) return sdr::setBandwidth((unsigned)atol(v));
+    if (!strcmp(what, "log"))
+    {
+        siglog::setOn(!strcmp(v, "on"));
+        return true;
+    }
     return false;
 }
 
